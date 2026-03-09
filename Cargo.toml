@@ -1,0 +1,15 @@
+[package]
+name = "apin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap       = { version = "4", features = ["derive"] }
+anyhow     = "1"
+tokio      = { version = "1", features = ["full"] }
+ratatui    = "0.30"
+crossterm  = "0.29"
+openapiv3  = "2"
+oas3       = { version = "0.20", features = ["yaml-spec"] }
+serde_yaml = "0.9"
+

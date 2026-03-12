@@ -457,6 +457,14 @@ struct App {
     /// The operation index for which `schema_tree_state` was last initialised.
     /// When it changes we reset the tree state so nodes start collapsed.
     schema_tree_op_key: Option<(usize, usize, usize)>, // (spec_idx, path_idx, op_idx)
+    /// Visible height of the detail view (rows), cached from last draw for half-page scroll.
+    detail_view_height: usize,
+    /// Incremental search state for the detail view.
+    detail_search: Search,
+    /// Virtual line indices of lines that match the current detail search query.
+    detail_search_matches: Vec<usize>,
+    /// Which match the cursor is currently on (index into detail_search_matches).
+    detail_search_cursor: usize,
 }
 
 impl App {
@@ -496,6 +504,10 @@ impl App {
             detail_tree_len: 0,
             schema_tree_state: TreeState::default(),
             schema_tree_op_key: None,
+            detail_view_height: 0,
+            detail_search: Search::default(),
+            detail_search_matches: Vec::new(),
+            detail_search_cursor: 0,
         }
     }
 
@@ -520,7 +532,8 @@ impl App {
         match self.focus {
             Focus::Tree => self.tree().map(|t| t.search.active).unwrap_or(false),
             Focus::Ops => self.ops.search.active,
-            Focus::Specs | Focus::Detail => false,
+            Focus::Detail => self.detail_search.active,
+            Focus::Specs => false,
         }
     }
 
@@ -675,14 +688,27 @@ async fn run(
                                     if let Some(t) = app.tree_mut() { t.search_cancel(); }
                                 }
                                 Focus::Ops => app.ops.search_cancel(),
-                                Focus::Specs | Focus::Detail => {}
+                                Focus::Detail => {
+                                    app.detail_search.active = false;
+                                    app.detail_search.query.clear();
+                                    app.detail_search_matches.clear();
+                                    app.detail_search_cursor = 0;
+                                }
+                                Focus::Specs => {}
                             },
                             KeyCode::Enter => match app.focus {
                                 Focus::Tree => {
                                     if let Some(t) = app.tree_mut() { t.search_commit(); }
                                 }
                                 Focus::Ops => app.ops.search_commit(),
-                                Focus::Specs | Focus::Detail => {}
+                                // In detail, Enter closes the input and jumps to first match.
+                                Focus::Detail => {
+                                    app.detail_search.active = false;
+                                    if let Some(&line) = app.detail_search_matches.first() {
+                                        app.detail_scroll = line;
+                                    }
+                                }
+                                Focus::Specs => {}
                             },
                             KeyCode::Backspace => match app.focus {
                                 Focus::Tree => {
@@ -693,7 +719,10 @@ async fn run(
                                     let flen = app.filtered_ops().len();
                                     app.ops.clamp(flen);
                                 }
-                                Focus::Specs | Focus::Detail => {}
+                                Focus::Detail => {
+                                    app.detail_search.query.pop();
+                                }
+                                Focus::Specs => {}
                             },
                             KeyCode::Char(ch) => {
                                 // Ctrl+U clears the query (Unix readline convention).
@@ -710,7 +739,12 @@ async fn run(
                                             let flen = app.filtered_ops().len();
                                             app.ops.clamp(flen);
                                         }
-                                        Focus::Specs | Focus::Detail => {}
+                                        Focus::Detail => {
+                                            app.detail_search.query.clear();
+                                            app.detail_search_matches.clear();
+                                            app.detail_search_cursor = 0;
+                                        }
+                                        Focus::Specs => {}
                                     }
                                 } else {
                                     match app.focus {
@@ -722,7 +756,13 @@ async fn run(
                                             let flen = app.filtered_ops().len();
                                             app.ops.clamp(flen);
                                         }
-                                        Focus::Specs | Focus::Detail => {}
+                                        Focus::Detail => {
+                                            app.detail_search.query.push(ch);
+                                            // Jump to first match as user types.
+                                            // (matches are recomputed in draw; we read the
+                                            // cached list on the next key after draw.)
+                                        }
+                                        Focus::Specs => {}
                                     }
                                 }
                             }
@@ -773,7 +813,7 @@ async fn run(
                                 _ => {}
                             }
                         } else {
-                            // ── Normal scrolling; Tab/f/Enter focuses tree if visible
+                            // ── Normal scrolling; f focuses tree if visible
                             match key.code {
                                 KeyCode::Backspace => {
                                     app.focus = Focus::Ops;
@@ -792,11 +832,48 @@ async fn run(
                                 KeyCode::Char('k') | KeyCode::Up => {
                                     app.detail_scroll = app.detail_scroll.saturating_sub(1);
                                 }
+                                KeyCode::Char('d')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    let half = (app.detail_view_height / 2).max(1);
+                                    app.detail_scroll += half;
+                                }
+                                KeyCode::Char('u')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    let half = (app.detail_view_height / 2).max(1);
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(half);
+                                }
                                 // f: focus the schema tree if it exists
                                 KeyCode::Char('f') => {
                                     if app.detail_tree_len > 0 {
                                         app.detail_in_tree = true;
                                         app.schema_tree_state.select_first();
+                                    }
+                                }
+                                // /: open detail search
+                                KeyCode::Char('/') => {
+                                    app.detail_search.active = true;
+                                    app.detail_search.query.clear();
+                                    app.detail_search_matches.clear();
+                                    app.detail_search_cursor = 0;
+                                }
+                                // n/N: jump to next/prev search match
+                                KeyCode::Char('n') => {
+                                    if !app.detail_search_matches.is_empty() {
+                                        app.detail_search_cursor = (app.detail_search_cursor + 1)
+                                            % app.detail_search_matches.len();
+                                        app.detail_scroll =
+                                            app.detail_search_matches[app.detail_search_cursor];
+                                    }
+                                }
+                                KeyCode::Char('N') => {
+                                    if !app.detail_search_matches.is_empty() {
+                                        let len = app.detail_search_matches.len();
+                                        app.detail_search_cursor =
+                                            app.detail_search_cursor.checked_sub(1).unwrap_or(len - 1);
+                                        app.detail_scroll =
+                                            app.detail_search_matches[app.detail_search_cursor];
                                     }
                                 }
                                 KeyCode::Char('g') => pending_g = true,
@@ -868,6 +945,51 @@ async fn run(
                                 app.detail_scroll = app.detail_scroll.saturating_sub(1);
                             }
                         },
+
+                        // Ctrl-D / Ctrl-U: half-page scroll
+                        KeyCode::Char('d')
+                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            match app.focus {
+                                Focus::Specs => {
+                                    for _ in 0..10 { app.specs_move_down(); }
+                                }
+                                Focus::Tree => {
+                                    if let Some(t) = app.tree_mut() {
+                                        for _ in 0..10 { t.move_down(); }
+                                    }
+                                }
+                                Focus::Ops => {
+                                    let flen = app.filtered_ops().len();
+                                    for _ in 0..10 { app.ops.move_down(flen); }
+                                }
+                                Focus::Detail => {
+                                    let half = (app.detail_view_height / 2).max(1);
+                                    app.detail_scroll += half;
+                                }
+                            }
+                        }
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            match app.focus {
+                                Focus::Specs => {
+                                    for _ in 0..10 { app.specs_move_up(); }
+                                }
+                                Focus::Tree => {
+                                    if let Some(t) = app.tree_mut() {
+                                        for _ in 0..10 { t.move_up(); }
+                                    }
+                                }
+                                Focus::Ops => {
+                                    for _ in 0..10 { app.ops.move_up(); }
+                                }
+                                Focus::Detail => {
+                                    let half = (app.detail_view_height / 2).max(1);
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(half);
+                                }
+                            }
+                        }
 
                         KeyCode::Char('g') => pending_g = true,
 
@@ -1613,17 +1735,56 @@ fn draw_detail_fullscreen(frame: &mut Frame, app: &mut App, area: Rect) {
     app.detail_tree_start = tree_start;
     app.detail_tree_len = tree_len;
 
+    // Recompute search matches whenever the query is non-empty.
+    // Only lines_above and lines_below are searchable (not the tree widget rows).
+    if !app.detail_search.query.is_empty() {
+        let q = app.detail_search.query.to_ascii_lowercase();
+        let mut matches: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| line_plain_text(l).to_ascii_lowercase().contains(&q))
+            .map(|(i, _)| i)
+            .collect();
+        let below_start = tree_end;
+        for (i, l) in lines_below.iter().enumerate() {
+            if line_plain_text(l).to_ascii_lowercase().contains(&q) {
+                matches.push(below_start + i);
+            }
+        }
+        // Clamp cursor if match list shrank.
+        if app.detail_search_matches != matches {
+            app.detail_search_matches = matches;
+            if app.detail_search_cursor >= app.detail_search_matches.len() {
+                app.detail_search_cursor = 0;
+            }
+        }
+    } else {
+        app.detail_search_matches.clear();
+        app.detail_search_cursor = 0;
+    }
+
     // Total virtual lines.
     let total_virtual = tree_end + lines_below.len();
 
     // Build outer block.
     let in_tree_indicator = if app.detail_in_tree { "●" } else { "○" };
+    let search_indicator = if !app.detail_search.query.is_empty() {
+        let cursor = if app.detail_search.active { "_" } else { "" };
+        let n = app.detail_search_matches.len();
+        let cur = if n > 0 { app.detail_search_cursor + 1 } else { 0 };
+        format!("  /{}{} [{}/{}]", app.detail_search.query, cursor, cur, n)
+    } else if app.detail_search.active {
+        "  /_".to_string()
+    } else {
+        String::new()
+    };
     let title = format!(
-        " {} {}  [line {}/{}] {} ",
+        " {} {}  [line {}/{}] {}{}",
         op.method, path_str,
         app.detail_scroll.saturating_add(1).min(total_virtual),
         total_virtual.max(1),
         in_tree_indicator,
+        search_indicator,
     );
 
     let outer_block = Block::default()
@@ -1639,6 +1800,8 @@ fn draw_detail_fullscreen(frame: &mut Frame, app: &mut App, area: Rect) {
     if view_h == 0 {
         return;
     }
+    // Cache for Ctrl-U/D half-page scroll.
+    app.detail_view_height = view_h;
 
     // Clamp scroll so we never scroll past the last line.
     let max_scroll = total_virtual.saturating_sub(view_h);
@@ -1656,7 +1819,9 @@ fn draw_detail_fullscreen(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if tree_len == 0 || !has_schema {
         // No tree: render everything as a single scrollable paragraph.
-        let combined: Vec<Line> = lines.into_iter().chain(lines_below.into_iter()).collect();
+        let matches = app.detail_search_matches.clone();
+        let mut combined: Vec<Line> = lines.into_iter().chain(lines_below.into_iter()).collect();
+        highlight_matched_lines(&mut combined, 0, &matches);
         let para = Paragraph::new(combined)
             .wrap(Wrap { trim: false })
             .scroll((scroll as u16, 0));
@@ -1712,11 +1877,14 @@ fn draw_detail_fullscreen(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints(constraints)
         .split(inner_area);
 
+    let matches = app.detail_search_matches.clone();
+
     let mut rect_idx = 0usize;
 
     // ── Render lines_above ────────────────────────────────────────────────────
     if above_rows > 0 {
         let above_scroll = scroll; // first line of lines_above to show
+        highlight_matched_lines(&mut lines, 0, &matches);
         let para = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((above_scroll as u16, 0));
@@ -1778,6 +1946,7 @@ fn draw_detail_fullscreen(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             0
         };
+        highlight_matched_lines(&mut lines_below, tree_end, &matches);
         let para = Paragraph::new(lines_below)
             .wrap(Wrap { trim: false })
             .scroll((below_scroll as u16, 0));
@@ -2151,13 +2320,16 @@ fn draw_path_detail(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_hint(frame: &mut Frame, app: &App, area: Rect) {
     let text = if app.is_searching() {
-        " type to filter  Enter: confirm  Esc: cancel  ↑/↓: move  Ctrl+U: clear"
+        match app.focus {
+            Focus::Detail => " type to search  Enter: jump to first  Esc: cancel  Backspace: delete  Ctrl+U: clear",
+            _ => " type to filter  Enter: confirm  Esc: cancel  ↑/↓: move  Ctrl+U: clear",
+        }
     } else {
         match app.focus {
-            Focus::Detail if app.detail_in_tree => " j/k: navigate  h/l: collapse/expand  Esc: unfocus  q: quit",
-            Focus::Detail => " j/k: scroll  f/Tab: focus schema  gg/G: top/bottom  Backspace/Esc/h: back  q: quit",
-            Focus::Ops => " j/k: navigate  gg/G: top/bottom  /: search  Enter: expand  h: back  q/Esc: quit",
-            _ => " j/k: navigate  gg/G: top/bottom  h/l: columns  /: search  Enter: detail  q/Esc: quit",
+            Focus::Detail if app.detail_in_tree => " j/k: navigate  h/l: collapse/expand  f: unfocus  q: quit",
+            Focus::Detail => " j/k: scroll  Ctrl-D/U: half-page  f: focus schema  /: search  n/N: next/prev  gg/G: top/bottom  Esc/h: back  q: quit",
+            Focus::Ops => " j/k: navigate  Ctrl-D/U: half-page  gg/G: top/bottom  /: search  Enter: expand  h: back  q/Esc: quit",
+            _ => " j/k: navigate  Ctrl-D/U: half-page  gg/G: top/bottom  h/l: columns  /: search  Enter: detail  q/Esc: quit",
         }
     };
     let hint = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
@@ -2165,6 +2337,25 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 // ─── Style helpers ────────────────────────────────────────────────────────────
+
+/// Extract plain text from a `Line` by concatenating all span contents.
+fn line_plain_text(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Apply a yellow-background highlight to every line whose virtual index is in
+/// `matches`.  `offset` is the virtual index of the first line in the slice.
+fn highlight_matched_lines(lines: &mut [Line], offset: usize, matches: &[usize]) {
+    if matches.is_empty() { return; }
+    for (i, line) in lines.iter_mut().enumerate() {
+        if matches.binary_search(&(offset + i)).is_ok() {
+            let style = Style::default().bg(Color::Yellow).fg(Color::Black);
+            for span in &mut line.spans {
+                span.style = span.style.patch(style);
+            }
+        }
+    }
+}
 
 fn border_style(active: bool) -> Style {
     if active {

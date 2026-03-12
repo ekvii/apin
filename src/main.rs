@@ -2,116 +2,122 @@ mod parser;
 mod tui;
 mod universe;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, anyhow};
+use async_walkdir::WalkDir;
 use clap::Parser;
+use futures_util::{FutureExt, TryFutureExt, TryStreamExt, future, stream};
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 
-use universe::load_universe;
+use universe::{Universe, spawn_spec_loader};
 
-/// apin — OpenAPI universe browser
 #[derive(Parser)]
 #[command(name = "apin", version)]
 struct Cli {
     /// One or more OpenAPI spec files or directories to load.
     /// Directories are scanned recursively for YAML files that contain
     /// a top-level `openapi:` field.
+    #[arg(required = true)]
     paths: Vec<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    if cli.paths.is_empty() {
-        bail!("no paths specified — run with --help for usage");
-    }
-
-    // Resolve every argument to a flat list of spec file paths before
-    // touching the terminal so errors are printed cleanly to the shell.
-    let mut files: Vec<String> = Vec::new();
-    for input in &cli.paths {
-        let p = Path::new(input);
-        if !p.exists() {
-            bail!("'{}' not found — make sure the path is correct", input);
-        }
-        if p.is_file() {
-            files.push(input.clone());
-        } else if p.is_dir() {
-            let found = collect_openapi_files(p)
-                .await
-                .with_context(|| format!("failed to scan directory '{}'", input))?;
-            if found.is_empty() {
-                bail!("no OpenAPI YAML files found in '{}'", input);
-            }
-            files.extend(found);
-        } else {
-            bail!("'{}' is neither a file nor a directory", input);
-        }
-    }
-
-    if files.is_empty() {
-        bail!("no OpenAPI spec files found");
-    }
-
-    let universe = load_universe(files)
-        .await
-        .context("failed to load specs")?;
-
-    tui::launch(universe)
+    let inputs = resolve_inputs(cli.paths);
+    let spec_rx = spawn_spec_loader(inputs);
+    tui::launch(Universe::default(), spec_rx).await
 }
 
-/// Recursively walk `dir` and return paths of every `.yaml` / `.yml` file
-/// whose content contains a top-level `openapi:` field.
-async fn collect_openapi_files(dir: &Path) -> Result<Vec<String>> {
-    let mut results = Vec::new();
-    collect_recursive(dir, &mut results).await?;
-    results.sort();
-    Ok(results)
+// ─── Input resolution ─────────────────────────────────────────────────────────
+
+/// Resolves CLI inputs into a merged stream of file paths.  Each input becomes
+/// its own stream; all streams are interleaved via `select_all` so paths are
+/// yielded as they are discovered across all inputs concurrently.
+fn resolve_inputs(
+    inputs: Vec<String>,
+) -> impl futures_util::Stream<Item = Result<String>> + Send + 'static {
+    let streams = inputs.into_iter().map(|input| {
+        let (is_file, is_dir) = {
+            let p = Path::new(&input);
+            (p.is_file(), p.is_dir())
+        };
+        let s: std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String>> + Send>> =
+            if is_file {
+                Box::pin(stream::once(future::ready(Ok(input))))
+            } else if is_dir {
+                Box::pin(collect_openapi_files(input))
+            } else {
+                Box::pin(stream::once(future::ready(Err(anyhow!(
+                    "'{}' not found — make sure the path is correct",
+                    input
+                )))))
+            };
+        s
+    });
+    stream::select_all(streams)
 }
 
-fn collect_recursive<'a>(
-    dir: &'a Path,
-    out: &'a mut Vec<String>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-    Box::pin(async move {
-        let mut entries = fs::read_dir(dir)
-            .await
-            .with_context(|| format!("cannot read directory '{}'", dir.display()))?;
+// ─── Directory scan ───────────────────────────────────────────────────────────
 
-        while let Some(entry) = entries.next_entry().await? {
+/// Recursively yields all `.yaml` / `.yml` files under `root` whose first
+/// 4 KB contains a top-level `openapi:` field, as a stream of paths.
+/// Files are yielded as they are discovered — no intermediate collection.
+fn collect_openapi_files(
+    root: String,
+) -> impl futures_util::Stream<Item = Result<String>> + Send + 'static {
+    WalkDir::new(&root)
+        .map_err(|e| anyhow!(e))
+        .try_filter_map(|entry| {
             let path = entry.path();
-            if path.is_dir() {
-                collect_recursive(&path, out).await?;
-            } else if is_yaml(&path) && has_openapi_field(&path).await? {
-                if let Some(s) = path.to_str() {
-                    out.push(s.to_string());
-                }
+            if !is_yaml(&path) {
+                return future::ready(Ok(None)).left_future();
             }
-        }
-        Ok(())
-    })
+            has_openapi_field(path.clone())
+                .map_ok(move |yes| yes.then(|| path.to_str().map(str::to_string)).flatten())
+                .right_future()
+        })
 }
 
-fn is_yaml(p: &Path) -> bool {
+fn is_yaml(p: &std::path::Path) -> bool {
     matches!(
         p.extension().and_then(|e| e.to_str()),
         Some("yaml") | Some("yml")
     )
 }
 
-/// Returns true if the file contains a line that starts with `openapi:`.
-/// Reads only the first 4 KB to avoid loading huge files just for the check.
-async fn has_openapi_field(p: &Path) -> Result<bool> {
-    use tokio::io::AsyncReadExt;
-    let mut file = fs::File::open(p)
-        .await
-        .with_context(|| format!("cannot open '{}'", p.display()))?;
+// ─── OpenAPI header sniff ─────────────────────────────────────────────────────
 
-    let mut buf = vec![0u8; 4096];
-    let n = file.read(&mut buf).await?;
-    let head = std::str::from_utf8(&buf[..n]).unwrap_or("");
-
-    Ok(head.lines().any(|line| line.trim_start().starts_with("openapi:")))
+/// Returns `true` if the file's first 4 KB contains a line starting with
+/// `openapi:`.
+///
+/// Expressed as a combinator chain — no `async` block, no `.await`.
+/// The read buffer and reader are captured inside `poll_fn` so no local
+/// borrows escape the closure boundary.
+fn has_openapi_field(path: PathBuf) -> impl std::future::Future<Output = Result<bool>> {
+    let path_for_err = path.display().to_string();
+    fs::File::open(path)
+        .map_err(move |e| anyhow!(e).context(format!("cannot open '{}'", path_for_err)))
+        .and_then(|file| {
+            future::poll_fn({
+                let mut buf = Vec::with_capacity(4096);
+                let mut reader = file.take(4096);
+                move |cx| {
+                    let read_fut = reader.read_to_end(&mut buf);
+                    tokio::pin!(read_fut);
+                    match read_fut.poll(cx) {
+                        std::task::Poll::Pending => std::task::Poll::Pending,
+                        std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(anyhow!(e))),
+                        std::task::Poll::Ready(Ok(_)) => {
+                            let head = std::str::from_utf8(&buf).unwrap_or("");
+                            std::task::Poll::Ready(Ok(head
+                                .lines()
+                                .any(|l| l.trim_start().starts_with("openapi:"))))
+                        }
+                    }
+                }
+            })
+        })
 }

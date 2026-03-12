@@ -1,9 +1,77 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
-use tokio::fs;
+use anyhow::{anyhow, bail, Context, Result};
+use futures_util::{future::try_join_all, stream::Stream, FutureExt, StreamExt, TryFutureExt};
+use tokio::{fs, sync::mpsc};
 
 use crate::parser;
+
+/// A single field extracted from a request-body schema.
+#[derive(Debug, Clone)]
+pub struct BodyField {
+    pub name: String,
+}
+
+// ─── Schema tree ─────────────────────────────────────────────────────────────
+
+/// The kind of a schema node, used for display hints.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SchemaKindHint {
+    Object,
+    Array,
+    AllOf,
+    AnyOf,
+    OneOf,
+    Primitive(String), // "string" | "integer" | "number" | "boolean" | ...
+    Unknown,
+}
+
+impl SchemaKindHint {
+    pub fn label(&self) -> &str {
+        match self {
+            SchemaKindHint::Object => "object",
+            SchemaKindHint::Array => "array",
+            SchemaKindHint::AllOf => "allOf",
+            SchemaKindHint::AnyOf => "anyOf",
+            SchemaKindHint::OneOf => "oneOf",
+            SchemaKindHint::Primitive(s) => s.as_str(),
+            SchemaKindHint::Unknown => "?",
+        }
+    }
+}
+
+/// A node in the schema tree, built from the resolved `serde_yaml::Value`.
+///
+/// Each node represents one logical schema entity: a named property, an array
+/// item, an allOf/anyOf/oneOf branch, etc.  The `children` list is non-empty
+/// for objects, arrays, and composition keywords.
+#[derive(Debug, Clone)]
+pub struct SchemaNode {
+    /// Display label: property name, "items", "allOf[0]", etc.
+    pub label: String,
+    /// The resolved type/kind of this node.
+    pub kind: SchemaKindHint,
+    /// Short description (trimmed to one line).
+    pub description: Option<String>,
+    /// Whether this field is required (only meaningful for object properties).
+    pub required: bool,
+    /// Child nodes (properties, items, allOf branches, …).
+    pub children: Vec<SchemaNode>,
+}
+
+impl SchemaNode {}
+
+/// Parsed request-body metadata.
+#[derive(Debug, Clone)]
+pub struct RequestBody {
+    /// Optional description from the requestBody object itself.
+    pub description: Option<String>,
+    /// Top-level fields of the body schema (empty if the schema is a $ref
+    /// that could not be resolved, or uses a non-object schema kind).
+    pub fields: Vec<BodyField>,
+    /// Structured schema tree for the collapsible detail view.
+    pub schema_tree: Option<SchemaNode>,
+}
 
 /// A single parameter (query, path, header, cookie) extracted from an operation.
 #[derive(Debug, Clone)]
@@ -12,8 +80,6 @@ pub struct Param {
     /// `query`, `path`, `header`, or `cookie`
     pub location: String,
     pub required: bool,
-    /// Optional description; stored for future display use.
-    #[allow(dead_code)]
     pub description: Option<String>,
 }
 
@@ -26,10 +92,10 @@ pub struct Operation {
     pub description: Option<String>,
     pub operation_id: Option<String>,
     pub params: Vec<Param>,
-    /// True when a requestBody is defined.
-    pub has_request_body: bool,
-    /// HTTP status codes declared in `responses`, e.g. `["200", "404"]`.
-    pub response_codes: Vec<String>,
+    /// Parsed request body, if present.
+    pub request_body: Option<RequestBody>,
+    /// HTTP status codes paired with their description, e.g. `[("200", Some("OK")), ("404", None)]`.
+    pub responses: Vec<(String, Option<String>)>,
 }
 
 /// One path entry: the path string plus all its operations.
@@ -60,51 +126,84 @@ pub struct Universe {
     pub specs: Vec<Spec>,
 }
 
-/// Load and parse every file in `files` concurrently.
-///
-/// Version detection works by reading the raw `openapi:` field from the YAML
-/// before full parsing so we can route to the right library:
-///   - `3.0.*`  → [`parser::v30`] (openapiv3, the most mature 3.0 library)
-///   - `3.1.*`  → [`parser::v31`] (oas3)
-///   - anything else → user-friendly [`anyhow`] error
-pub async fn load_universe(files: Vec<String>) -> Result<Universe> {
-    // Spawn one task per file, all running concurrently.
-    let handles: Vec<_> = files
-        .into_iter()
-        .map(|file| tokio::spawn(async move { load_spec(file).await }))
-        .collect();
-
-    let mut specs = Vec::with_capacity(handles.len());
-    for handle in handles {
-        // Propagate both join errors and parse errors with useful context.
-        let spec = handle.await.context("task panicked while loading spec")??;
-        specs.push(spec);
+impl Universe {
+    /// Append a spec and return its index.
+    pub fn push_spec(&mut self, spec: Spec) -> usize {
+        let idx = self.specs.len();
+        self.specs.push(spec);
+        idx
     }
+}
 
-    Ok(Universe { specs })
+/// Spawn a task that drives `files` — a stream of file paths — and for each
+/// path immediately spawns an independent load task.  Parsed [`Spec`]s are sent
+/// over the returned channel as soon as they are ready, without waiting for the
+/// other paths.  The channel closes once the stream is exhausted and all load
+/// tasks have finished.
+pub fn spawn_spec_loader(
+    files: impl Stream<Item = Result<String>> + Send + 'static,
+) -> mpsc::UnboundedReceiver<Result<Spec>> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(files.for_each(move |result| {
+        let tx = tx.clone();
+        match result {
+            Err(e) => {
+                let _ = tx.send(Err(e));
+            }
+            Ok(file) => {
+                // Each file gets its own task so they all load concurrently.
+                tokio::spawn(load_spec(file).map(move |result| {
+                    let _ = tx.send(result);
+                }));
+            }
+        }
+        std::future::ready(())
+    }));
+    rx
+}
+
+/// Load and parse every file in `files` concurrently, collecting all results
+/// before returning.  Kept for tests and any callers that need a complete
+/// [`Universe`] upfront.
+#[allow(dead_code)]
+pub fn load_universe(files: Vec<String>) -> impl std::future::Future<Output = Result<Universe>> {
+    try_join_all(files.into_iter().map(load_spec)).map_ok(|specs| Universe { specs })
 }
 
 /// Read a single file, sniff its OpenAPI version, and dispatch to the
 /// appropriate parser module.
-async fn load_spec(file_path: String) -> Result<Spec> {
-    let content = fs::read_to_string(&file_path)
-        .await
-        .with_context(|| format!("could not read file '{}'", file_path))?;
-
-    let version = sniff_version(&content)
-        .with_context(|| format!("'{}' does not look like an OpenAPI document", file_path))?;
-
-    if version.starts_with("3.0") {
-        parser::v30::parse(file_path, content).await
-    } else if version.starts_with("3.1") {
-        parser::v31::parse(file_path, content).await
-    } else {
-        bail!(
-            "'{}' uses unsupported OpenAPI version '{}' (only 3.0.x and 3.1.x are supported)",
-            file_path,
-            version
-        )
-    }
+///
+/// Expressed as a combinator chain — no internal `.await` points.
+fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<Spec>> {
+    let path_for_read_err = file_path.clone();
+    fs::read_to_string(file_path.clone())
+        // Map the io::Error into anyhow with context before entering and_then.
+        .map_err(move |e| {
+            anyhow!(e).context(format!("could not read file '{}'", path_for_read_err))
+        })
+        .and_then(move |content| {
+            // Parsing is CPU-bound; run it off the async executor.
+            let fp = file_path.clone();
+            tokio::task::spawn_blocking(move || {
+                let version = sniff_version(&content)
+                    .with_context(|| format!("'{}' does not look like an OpenAPI document", fp))?;
+                if version.starts_with("3.0") {
+                    parser::v30::parse(fp, content)
+                } else if version.starts_with("3.1") {
+                    parser::v31::parse(fp, content)
+                } else {
+                    bail!(
+                        "'{}' uses unsupported OpenAPI version '{}' \
+                         (only 3.0.x and 3.1.x are supported)",
+                        fp,
+                        version
+                    )
+                }
+            })
+            // Flatten JoinError into anyhow, then the inner Result<Spec>.
+            .map_err(|e| anyhow!(e))
+            .and_then(std::future::ready)
+        })
 }
 
 /// Extract the value of the top-level `openapi:` key without fully

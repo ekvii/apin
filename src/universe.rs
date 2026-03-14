@@ -169,8 +169,9 @@ fn sniff_version(content: &str) -> Option<String> {
             }
         }
         // JSON: `"openapi": "3.1.0"`
-        if trimmed.contains("\"openapi\"") {
-            if let Some(colon) = trimmed.find(':') {
+        if trimmed.contains("\"openapi\"")
+            && let Some(colon) = trimmed.find(':')
+        {
                 let v = trimmed[colon + 1..]
                     .trim()
                     .trim_matches('"')
@@ -179,7 +180,6 @@ fn sniff_version(content: &str) -> Option<String> {
                 if !v.is_empty() {
                     return Some(v);
                 }
-            }
         }
     }
     None

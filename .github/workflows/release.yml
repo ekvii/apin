@@ -64,7 +64,7 @@ jobs:
             ext: ""
 
           - name: macOS x86-64
-            os: macos-13          # last Intel GitHub runner
+            os: macos-15-intel    # Intel (x86-64) runner
             target: x86_64-apple-darwin
             use_cross: false
             asset_suffix: macos-x86_64

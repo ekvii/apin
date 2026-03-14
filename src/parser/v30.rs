@@ -34,11 +34,7 @@ pub fn parse(file_path: String, content: String) -> Result<Spec> {
                 ReferenceOr::Item(item) => item
                     .iter()
                     .map(|(method, op)| {
-                        let params = op
-                            .parameters
-                            .iter()
-                            .filter_map(|p| resolve_param(p))
-                            .collect();
+                        let params = op.parameters.iter().filter_map(resolve_param).collect();
 
                         let responses = op
                             .responses
@@ -174,25 +170,21 @@ fn resolve_refs_in_value(
         serde_yaml::Value::Mapping(mut map) => {
             // Check if this mapping is a bare $ref node.
             let ref_key = serde_yaml::Value::String("$ref".to_string());
-            if let Some(ref_val) = map.get(&ref_key).cloned() {
-                if let serde_yaml::Value::String(ref ref_str) = ref_val {
-                    if let Some(name) = ref_str.strip_prefix("#/components/schemas/") {
-                        if !visited.contains(name) {
-                            if let Some(target) = schemas.and_then(|s| s.get(name)) {
-                                visited.insert(name.to_string());
-                                let resolved =
-                                    resolve_refs_in_value(target.clone(), schemas, visited);
-                                visited.remove(name);
-                                return resolved;
-                            }
-                        }
-                        // Cyclic or not found: leave as-is but drop the ugly $ref string
-                        map.remove(&ref_key);
-                        let name_key = serde_yaml::Value::String("type".to_string());
-                        map.insert(name_key, serde_yaml::Value::String(name.to_string()));
-                        return serde_yaml::Value::Mapping(map);
-                    }
+            if let Some(serde_yaml::Value::String(ref ref_str)) = map.get(&ref_key).cloned()
+                && let Some(name) = ref_str.strip_prefix("#/components/schemas/")
+            {
+                if !visited.contains(name) && let Some(target) = schemas.and_then(|s| s.get(name)) {
+                    visited.insert(name.to_string());
+                    let resolved =
+                        resolve_refs_in_value(target.clone(), schemas, visited);
+                    visited.remove(name);
+                    return resolved;
                 }
+                // Cyclic or not found: leave as-is but drop the ugly $ref string
+                map.remove(&ref_key);
+                let name_key = serde_yaml::Value::String("type".to_string());
+                map.insert(name_key, serde_yaml::Value::String(name.to_string()));
+                return serde_yaml::Value::Mapping(map);
             }
             // Not a $ref — recurse into all values.
             let resolved_map: serde_yaml::Mapping = map
@@ -286,7 +278,7 @@ fn value_to_schema_node(
 
     // Extract description (first line only).
     let description: Option<String> = mapping
-        .get(&serde_yaml::Value::String("description".into()))
+        .get(serde_yaml::Value::String("description".into()))
         .and_then(|v| match v {
             serde_yaml::Value::String(s) => Some(s.lines().next().unwrap_or("").trim().to_string()),
             _ => None,
@@ -296,7 +288,7 @@ fn value_to_schema_node(
     // Helper to get a string key from the mapping.
     let str_val = |key: &str| -> Option<&str> {
         mapping
-            .get(&serde_yaml::Value::String(key.into()))
+            .get(serde_yaml::Value::String(key.into()))
             .and_then(|v| {
                 if let serde_yaml::Value::String(s) = v {
                     Some(s.as_str())
@@ -313,7 +305,7 @@ fn value_to_schema_node(
         ("oneOf", SchemaKindHint::OneOf),
     ] {
         if let Some(serde_yaml::Value::Sequence(branches)) =
-            mapping.get(&serde_yaml::Value::String((*kw).into()))
+            mapping.get(serde_yaml::Value::String((*kw).into()))
         {
             let children: Vec<SchemaNode> = branches
                 .iter()
@@ -334,11 +326,11 @@ fn value_to_schema_node(
 
     // ── Object with properties ────────────────────────────────────────────────
     if let Some(serde_yaml::Value::Mapping(props)) =
-        mapping.get(&serde_yaml::Value::String("properties".into()))
+        mapping.get(serde_yaml::Value::String("properties".into()))
     {
         // Collect required set for children.
         let child_required: HashSet<String> = mapping
-            .get(&serde_yaml::Value::String("required".into()))
+            .get(serde_yaml::Value::String("required".into()))
             .and_then(|v| {
                 if let serde_yaml::Value::Sequence(seq) = v {
                     Some(
@@ -379,7 +371,7 @@ fn value_to_schema_node(
     }
 
     // ── Array with items ──────────────────────────────────────────────────────
-    if let Some(items_val) = mapping.get(&serde_yaml::Value::String("items".into())) {
+    if let Some(items_val) = mapping.get(serde_yaml::Value::String("items".into())) {
         let item_node = value_to_schema_node("items".to_string(), items_val, &HashSet::new());
         return SchemaNode {
             label,

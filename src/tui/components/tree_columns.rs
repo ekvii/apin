@@ -81,11 +81,7 @@ pub(crate) fn draw(
     // Slide the window so the active column is always visible.
     let max_visible = ((area.width / MIN_COL_WIDTH) as usize).max(1);
     let visible = total_cols.min(max_visible);
-    let window_start = if logical_active + 1 <= visible {
-        0
-    } else {
-        logical_active + 1 - visible
-    };
+    let window_start = (logical_active + 1).saturating_sub(visible);
     let window_end = (window_start + visible).min(total_cols);
 
     let constraints: Vec<Constraint> = (0..visible)

@@ -39,6 +39,7 @@ impl Search {
 // ─── DetailView ───────────────────────────────────────────────────────────────
 
 /// All state and rendering logic for the full-screen operation detail panel.
+#[derive(Default)]
 pub(crate) struct DetailView {
     /// Scroll offset (in virtual lines).
     pub(crate) scroll: usize,
@@ -61,23 +62,6 @@ pub(crate) struct DetailView {
     pub(crate) search_matches: Vec<usize>,
     /// Which match the cursor is currently on (index into `search_matches`).
     search_cursor: usize,
-}
-
-impl Default for DetailView {
-    fn default() -> Self {
-        Self {
-            scroll: 0,
-            in_tree: false,
-            tree_start: 0,
-            tree_len: 0,
-            schema_tree_state: TreeState::default(),
-            schema_tree_op_key: None,
-            view_height: 0,
-            search: Search::default(),
-            search_matches: Vec::new(),
-            search_cursor: 0,
-        }
-    }
 }
 
 impl DetailView {
@@ -362,8 +346,9 @@ impl DetailView {
         }
 
         // ── Description ───────────────────────────────────────────────────────
-        if let Some(ref desc) = op.description {
-            if op.summary.as_deref() != Some(desc.as_str()) {
+        if let Some(ref desc) = op.description
+            && op.summary.as_deref() != Some(desc.as_str())
+        {
                 lines.push(Line::raw(""));
                 lines.push(Line::from(Span::styled(
                     "  Description",
@@ -375,7 +360,6 @@ impl DetailView {
                         Style::default().fg(Color::Gray),
                     )));
                 }
-            }
         }
 
         // ── Parameters ────────────────────────────────────────────────────────
@@ -476,7 +460,7 @@ impl DetailView {
             .and_then(|rb| rb.schema_tree.as_ref());
 
         let (_schema_header_lines, owned_effective_children, tree_id_start) =
-            if let Some(ref node) = schema_node_opt {
+            if let Some(node) = schema_node_opt {
                 let (hdr, ch, id_start) = schema_effective_roots(node);
                 (hdr, ch.to_vec(), id_start)
             } else {
@@ -661,7 +645,7 @@ impl DetailView {
         if tree_len == 0 || !has_schema {
             let matches = self.search_matches.clone();
             let mut combined: Vec<Line> =
-                lines.into_iter().chain(lines_below.into_iter()).collect();
+                lines.into_iter().chain(lines_below).collect();
             highlight_matched_lines(&mut combined, 0, &matches);
             let para = Paragraph::new(combined)
                 .wrap(Wrap { trim: false })
@@ -678,11 +662,7 @@ impl DetailView {
         };
         let tree_visible_start = tree_start.max(scroll);
         let tree_visible_end = tree_end.min(view_end);
-        let tree_rows = if tree_visible_end > tree_visible_start {
-            tree_visible_end - tree_visible_start
-        } else {
-            0
-        };
+        let tree_rows = tree_visible_end.saturating_sub(tree_visible_start);
         let below_rows = view_h.saturating_sub(above_rows + tree_rows);
 
         if !self.in_tree && tree_rows > 0 {
@@ -777,11 +757,7 @@ impl DetailView {
 
         // ── Render lines_below ────────────────────────────────────────────────
         if below_rows > 0 {
-            let below_scroll = if scroll >= tree_end {
-                scroll - tree_end
-            } else {
-                0
-            };
+            let below_scroll = scroll.saturating_sub(tree_end);
             highlight_matched_lines(&mut lines_below, tree_end, &matches);
             let para = Paragraph::new(lines_below)
                 .wrap(Wrap { trim: false })
@@ -814,8 +790,9 @@ fn schema_effective_roots(node: &SchemaNode) -> (Vec<Line<'static>>, &[SchemaNod
     }
     header.push(Line::from(root_spans));
 
-    if node.kind == SchemaKindHint::Array {
-        if let Some(items) = node.children.first() {
+    if node.kind == SchemaKindHint::Array
+        && let Some(items) = node.children.first()
+    {
             let items_kind = items.kind.label().to_string();
             let mut items_spans: Vec<Span<'static>> = vec![
                 Span::styled("  items ", Style::default().fg(Color::DarkGray)),
@@ -831,7 +808,6 @@ fn schema_effective_roots(node: &SchemaNode) -> (Vec<Line<'static>>, &[SchemaNod
 
             let id_start = 2usize;
             return (header, &items.children, id_start);
-        }
     }
 
     (header, &node.children, 1usize)

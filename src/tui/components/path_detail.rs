@@ -146,19 +146,20 @@ pub(crate) fn draw(
     lines.push(Line::from(header));
 
     // ── Operation ID (when summary is also present) ────────────────────────────
-    if op.summary.is_some() {
-        if let Some(ref oid) = op.operation_id {
+    if op.summary.is_some()
+        && let Some(ref oid) = op.operation_id
+    {
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled("id      ", Style::default().fg(Color::DarkGray)),
                 Span::styled(oid.as_str(), Style::default().fg(Color::Gray)),
             ]));
-        }
     }
 
     // ── Description ───────────────────────────────────────────────────────────
-    if let Some(ref desc) = op.description {
-        if op.summary.as_deref() != Some(desc.as_str()) {
+    if let Some(ref desc) = op.description
+        && op.summary.as_deref() != Some(desc.as_str())
+    {
             lines.push(Line::raw(""));
             for desc_line in desc.lines() {
                 lines.push(Line::from(Span::styled(
@@ -166,7 +167,6 @@ pub(crate) fn draw(
                     Style::default().fg(Color::DarkGray),
                 )));
             }
-        }
     }
 
     lines.push(Line::raw(""));

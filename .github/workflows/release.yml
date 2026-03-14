@@ -161,3 +161,17 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: artifacts/*
+
+  # ── 4. Trigger homebrew tap update ──────────────────────────────────────────
+  update-tap:
+    name: Update Homebrew tap
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to homebrew-apin
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          repository: ekvii/homebrew-apin
+          event-type: apin-release
+          client-payload: '{"version": "${{ needs.validate.outputs.version }}"}'

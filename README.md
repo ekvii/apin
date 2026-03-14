@@ -9,6 +9,18 @@ Browse any number of specs with a Miller-columns path tree, inspect endpoints in
 full-screen detail view, and filter with incremental search — all without leaving
 the terminal.
 
+## Installation
+
+### Homebrew (macOS and Linux)
+
+```sh
+brew install ekvii/apin/apin
+```
+
+### Binaries (Linux, macOS, Windows)
+
+[Latest release binaries](https://github.com/ekvii/apin/releases/latest) are available for Linux, macOS, and Windows. Download the binary for your platform and add it to your `PATH`.
+
 ## Usage
 
 ```sh

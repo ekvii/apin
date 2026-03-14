@@ -1,0 +1,173 @@
+openapi: "3.1.0"
+info:
+  title: Fixture API
+  version: "1.0.0"
+  description: Artificial OpenAPI 3.1 spec used by parser unit tests.
+
+paths:
+  /v1/vpcs:
+    get:
+      operationId: listVpcs
+      summary: List VPCs
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: createVpc
+      summary: Create a VPC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVpcRequest"
+      responses:
+        "201":
+          description: Created
+
+  /v1/vpcs/{vpcId}:
+    get:
+      operationId: getVpc
+      summary: Get a VPC
+      parameters:
+        - name: vpcId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+    put:
+      operationId: updateVpc
+      summary: Update a VPC
+      parameters:
+        - name: vpcId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVpcRequest"
+      responses:
+        "200":
+          description: OK
+    delete:
+      operationId: deleteVpc
+      summary: Delete a VPC
+      parameters:
+        - name: vpcId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+
+  /v1/subnets:
+    post:
+      operationId: createSubnet
+      summary: Create a subnet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubnetRequest"
+      responses:
+        "201":
+          description: Created
+
+  /v1/subnets/{subnetId}:
+    patch:
+      operationId: patchSubnet
+      summary: Partially update a subnet
+      parameters:
+        - name: subnetId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchSubnetRequest"
+      responses:
+        "200":
+          description: OK
+
+components:
+  schemas:
+    CreateVpcRequest:
+      type: object
+      required:
+        - name
+        - projectId
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the VPC.
+        projectId:
+          type: string
+          description: ID of the project this VPC belongs to.
+        description:
+          type: string
+          description: Optional description.
+        cidr:
+          type: string
+          description: CIDR block for the VPC, e.g. 10.0.0.0/16.
+
+    UpdateVpcRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: New name for the VPC.
+        description:
+          type: string
+          description: Updated description.
+
+    CreateSubnetRequest:
+      type: object
+      required:
+        - name
+        - vpcId
+        - cidr
+      properties:
+        name:
+          type: string
+          description: Name of the subnet.
+        vpcId:
+          type: string
+          description: ID of the parent VPC.
+        cidr:
+          type: string
+          description: CIDR block for the subnet.
+        zone:
+          type: string
+          description: Availability zone.
+
+    PatchSubnetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: New name for the subnet.
+        description:
+          type: string
+          description: Updated description.

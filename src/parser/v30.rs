@@ -552,13 +552,15 @@ fn resolve_param(p: &ReferenceOr<Parameter>) -> Option<Param> {
 mod tests {
     use super::*;
 
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/openapi30_fixture.yaml"
+    );
+
     #[test]
     fn vpc_post_has_body_fields() {
-        let content = std::fs::read_to_string(
-            "../terraform-provider-cloudru-community/openapi/cloudru.vpc.openapi.yaml",
-        )
-        .expect("VPC spec not found");
-        let spec = parse("vpc.yaml".to_string(), content).expect("parse failed");
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).expect("parse failed");
         let vpc_path = spec
             .paths
             .iter()
@@ -578,12 +580,9 @@ mod tests {
     }
 
     #[test]
-    fn compute_post_bodies_have_fields() {
-        let content = std::fs::read_to_string(
-            "../terraform-provider-cloudru-community/openapi/cloudru.compute.openapi.yaml",
-        )
-        .expect("compute spec not found");
-        let spec = parse("compute.yaml".to_string(), content).expect("parse failed");
+    fn all_mutating_operations_have_body_fields() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).expect("parse failed");
         let empty: Vec<_> = spec
             .paths
             .iter()
@@ -606,11 +605,8 @@ mod tests {
 
     #[test]
     fn vpc_post_schema_tree_populated() {
-        let content = std::fs::read_to_string(
-            "../terraform-provider-cloudru-community/openapi/cloudru.vpc.openapi.yaml",
-        )
-        .unwrap();
-        let spec = parse("vpc.yaml".to_string(), content).unwrap();
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
         let post = spec
             .paths
             .iter()

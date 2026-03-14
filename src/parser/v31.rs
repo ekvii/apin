@@ -465,3 +465,94 @@ fn resolve_schema<'a>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/openapi31_fixture.yaml"
+    );
+
+    #[test]
+    fn vpc_post_has_body_fields() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).expect("parse failed");
+        let vpc_path = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .expect("/v1/vpcs not found");
+        let post = vpc_path
+            .operations
+            .iter()
+            .find(|o| o.method == "POST")
+            .expect("POST not found");
+        let rb = post.request_body.as_ref().expect("request_body is None");
+        assert!(!rb.fields.is_empty(), "expected fields but got none");
+        assert!(
+            rb.fields.iter().any(|f| f.name == "name"),
+            "expected 'name' field"
+        );
+    }
+
+    #[test]
+    fn all_mutating_operations_have_body_fields() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).expect("parse failed");
+        let empty: Vec<_> = spec
+            .paths
+            .iter()
+            .flat_map(|p| p.operations.iter().map(move |o| (p, o)))
+            .filter(|(_, o)| matches!(o.method.as_str(), "POST" | "PUT" | "PATCH"))
+            .filter(|(_, o)| {
+                o.request_body
+                    .as_ref()
+                    .map(|rb| rb.fields.is_empty())
+                    .unwrap_or(false)
+            })
+            .map(|(p, o)| format!("{} {}", o.method, p.path))
+            .collect();
+        assert!(
+            empty.is_empty(),
+            "operations with empty body fields: {:?}",
+            empty
+        );
+    }
+
+    #[test]
+    fn vpc_post_schema_tree_populated() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let post = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "POST")
+            .unwrap();
+        let tree = post
+            .request_body
+            .as_ref()
+            .unwrap()
+            .schema_tree
+            .as_ref()
+            .expect("schema_tree should be Some");
+        // The root should be an object with named children (properties).
+        assert!(
+            !tree.children.is_empty(),
+            "expected schema_tree to have children"
+        );
+        assert!(
+            tree.children.iter().any(|c| c.label == "name"),
+            "expected 'name' child in schema_tree"
+        );
+        assert!(
+            tree.children.iter().any(|c| c.label == "projectId"),
+            "expected 'projectId' child in schema_tree"
+        );
+    }
+}

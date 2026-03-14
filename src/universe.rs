@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures_util::{future::try_join_all, stream::Stream, FutureExt, StreamExt, TryFutureExt};
-use tokio::{fs, sync::mpsc};
+use futures_util::TryFutureExt;
+use tokio::fs;
 
 use crate::parser;
 
@@ -120,61 +120,11 @@ pub struct Spec {
     pub paths: Vec<PathEntry>,
 }
 
-/// The collection of all loaded specs.
-#[derive(Debug, Default)]
-pub struct Universe {
-    pub specs: Vec<Spec>,
-}
-
-impl Universe {
-    /// Append a spec and return its index.
-    pub fn push_spec(&mut self, spec: Spec) -> usize {
-        let idx = self.specs.len();
-        self.specs.push(spec);
-        idx
-    }
-}
-
-/// Spawn a task that drives `files` — a stream of file paths — and for each
-/// path immediately spawns an independent load task.  Parsed [`Spec`]s are sent
-/// over the returned channel as soon as they are ready, without waiting for the
-/// other paths.  The channel closes once the stream is exhausted and all load
-/// tasks have finished.
-pub fn spawn_spec_loader(
-    files: impl Stream<Item = Result<String>> + Send + 'static,
-) -> mpsc::UnboundedReceiver<Result<Spec>> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(files.for_each(move |result| {
-        let tx = tx.clone();
-        match result {
-            Err(e) => {
-                let _ = tx.send(Err(e));
-            }
-            Ok(file) => {
-                // Each file gets its own task so they all load concurrently.
-                tokio::spawn(load_spec(file).map(move |result| {
-                    let _ = tx.send(result);
-                }));
-            }
-        }
-        std::future::ready(())
-    }));
-    rx
-}
-
-/// Load and parse every file in `files` concurrently, collecting all results
-/// before returning.  Kept for tests and any callers that need a complete
-/// [`Universe`] upfront.
-#[allow(dead_code)]
-pub fn load_universe(files: Vec<String>) -> impl std::future::Future<Output = Result<Universe>> {
-    try_join_all(files.into_iter().map(load_spec)).map_ok(|specs| Universe { specs })
-}
-
 /// Read a single file, sniff its OpenAPI version, and dispatch to the
 /// appropriate parser module.
 ///
 /// Expressed as a combinator chain — no internal `.await` points.
-fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<Spec>> {
+pub fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<Spec>> {
     let path_for_read_err = file_path.clone();
     fs::read_to_string(file_path.clone())
         // Map the io::Error into anyhow with context before entering and_then.

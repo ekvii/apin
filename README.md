@@ -1,6 +1,7 @@
 # apin - OpenAPI Navigator CLI
 
-[![Release](https://github.com/ekvii/apin/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/ekvii/apin/actions/workflows/release.yml)
+[![CI](https://github.com/ekvii/apin/actions/workflows/ci.yml/badge.svg)](https://github.com/ekvii/apin/actions/workflows/ci.yml)
+[![Release](https://github.com/ekvii/apin/actions/workflows/release.yml/badge.svg)](https://github.com/ekvii/apin/actions/workflows/release.yml)
 
 A terminal UI for navigating OpenAPI specs — fast, keyboard-driven, zero configuration.
 

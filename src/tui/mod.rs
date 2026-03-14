@@ -1,6 +1,6 @@
 mod app;
+mod components;
 mod events;
-mod path_tree;
 
 use anyhow::{Context, Result};
 use crossterm::{

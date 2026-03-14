@@ -132,7 +132,9 @@ mod tests {
         }
         for child in &node.children {
             let prev = path.len();
-            if !path.is_empty() { path.push('/'); }
+            if !path.is_empty() {
+                path.push('/');
+            }
             path.push_str(&child.label);
             collect(child, path, out);
             path.truncate(prev);
@@ -150,8 +152,16 @@ mod tests {
         let root = build_tree(&paths);
         let leaves = leaf_indices(&root);
         // Both indices must appear exactly once.
-        assert!(leaves.iter().any(|(_, i)| *i == 0), "index 0 missing: {:?}", leaves);
-        assert!(leaves.iter().any(|(_, i)| *i == 1), "index 1 missing: {:?}", leaves);
+        assert!(
+            leaves.iter().any(|(_, i)| *i == 0),
+            "index 0 missing: {:?}",
+            leaves
+        );
+        assert!(
+            leaves.iter().any(|(_, i)| *i == 1),
+            "index 1 missing: {:?}",
+            leaves
+        );
     }
 
     #[test]
@@ -163,7 +173,15 @@ mod tests {
         ];
         let root = build_tree(&paths);
         let leaves = leaf_indices(&root);
-        assert!(leaves.iter().any(|(_, i)| *i == 0), "index 0 missing: {:?}", leaves);
-        assert!(leaves.iter().any(|(_, i)| *i == 1), "index 1 missing: {:?}", leaves);
+        assert!(
+            leaves.iter().any(|(_, i)| *i == 0),
+            "index 0 missing: {:?}",
+            leaves
+        );
+        assert!(
+            leaves.iter().any(|(_, i)| *i == 1),
+            "index 1 missing: {:?}",
+            leaves
+        );
     }
 }

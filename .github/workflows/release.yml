@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Each matrix entry produces one release asset.
+# Linux builds run on ubuntu-latest; macOS on macos-latest (ARM64 runner);
+# Windows on windows-latest. Linux ARM64 is cross-compiled via `cross`.
+
+jobs:
+  # ── 1. Validate the tag matches Cargo.toml ──────────────────────────────────
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # e.g. v1.2.3
+          SEMVER="${TAG#v}"                  # e.g. 1.2.3
+          echo "version=${SEMVER}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Cargo.toml matches tag
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: Cargo.toml version ($CARGO_VERSION) does not match tag ($TAG_VERSION)"
+            echo "Bump Cargo.toml to $TAG_VERSION before pushing the tag."
+            exit 1
+          fi
+
+  # ── 2. Build release binaries ────────────────────────────────────────────────
+  build:
+    name: Build — ${{ matrix.name }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            use_cross: false
+            asset_suffix: linux-x86_64
+            ext: ""
+
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            use_cross: true
+            asset_suffix: linux-arm64
+            ext: ""
+
+          - name: macOS x86-64
+            os: macos-13          # last Intel GitHub runner
+            target: x86_64-apple-darwin
+            use_cross: false
+            asset_suffix: macos-x86_64
+            ext: ""
+
+          - name: macOS ARM64
+            os: macos-latest      # M-series runner
+            target: aarch64-apple-darwin
+            use_cross: false
+            asset_suffix: macos-arm64
+            ext: ""
+
+          - name: Windows x86-64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            use_cross: false
+            asset_suffix: windows-x86_64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # musl libc needed for static Linux binaries
+      - name: Install musl tools (Linux x86-64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get install -y musl-tools
+
+      # cross handles the ARM64 toolchain automatically
+      - name: Install cross (Linux ARM64)
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: "!matrix.use_cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          BIN="apin${{ matrix.ext }}"
+          ASSET="apin-v${VERSION}-${{ matrix.asset_suffix }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/${BIN}" "${ASSET}"
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  # ── 3. Create GitHub Release and attach all binaries ────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "apin v${{ needs.validate.outputs.version }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: artifacts/*

@@ -11,6 +11,8 @@ the terminal.
 
 Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
 
+![apin demo](assets/apin.gif)
+
 ## Installation
 
 ### Homebrew (macOS and Linux)
@@ -48,7 +50,7 @@ apin https://api.example.com
 # explicit spec URL
 apin https://api.example.com/openapi.yaml
 
-# cache downloaded specs (re-uses existing files on next run)
+# dir for downloaded specs (re-uses existing files on next run)
 apin --download-dir . https://api.example.com
 
 # force re-download even if the file already exists

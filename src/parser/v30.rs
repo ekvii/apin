@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use openapiv3::{Components, OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 
-use crate::universe::{
+use crate::spec::{
     BodyField, Operation, Param, PathEntry, RequestBody, SchemaKindHint, SchemaNode, Spec,
 };
 

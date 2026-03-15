@@ -33,6 +33,15 @@ impl EventHandler {
             return Action::Continue;
         }
 
+        // ── Loading screen — only quit is accepted ────────────────────────────
+        if app.is_loading() {
+            return match key.code {
+                KeyCode::Char('q') => Action::Quit,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Quit,
+                _ => Action::Continue,
+            };
+        }
+
         // ── Search input mode ─────────────────────────────────────────────────
         if app.is_searching() {
             return handle_search_key(app, key);

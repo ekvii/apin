@@ -6,7 +6,7 @@ use oas3::spec::{
     Components, ObjectOrReference, ObjectSchema, Operation as Oas3Operation, PathItem,
 };
 
-use crate::universe::{
+use crate::spec::{
     BodyField, Operation, Param, PathEntry, RequestBody, SchemaKindHint, SchemaNode, Spec,
 };
 

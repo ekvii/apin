@@ -1,16 +1,27 @@
 use std::io::Stdout;
 
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::ListState,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    widgets::{ListState, Paragraph},
+    Frame, Terminal,
 };
 
-use crate::universe::Spec;
+use crate::spec::Spec;
 
 use super::components::detail::{DetailView, Search};
-use super::components::path_tree::{PathNode, build_tree};
+use super::components::path_tree::{build_tree, PathNode};
+
+// ─── Loading state ────────────────────────────────────────────────────────────
+
+/// What the app is currently doing, shown in the loading screen.
+pub(super) enum LoadingState {
+    /// Waiting for the first spec — show the spinner.
+    Loading { tick: u8 },
+    /// At least one spec received — show the normal UI.
+    Done,
+}
 
 // ─── Focus ────────────────────────────────────────────────────────────────────
 
@@ -390,6 +401,8 @@ pub(super) struct ApinApp {
     ops: OpsState,
     /// Full-screen operation detail panel state and rendering.
     pub(super) detail: DetailView,
+    /// Loading progress — switches to `Done` once all inputs are resolved.
+    pub(super) loading: LoadingState,
 }
 
 impl ApinApp {
@@ -402,7 +415,30 @@ impl ApinApp {
             trees: Vec::new(),
             ops: OpsState::default(),
             detail: DetailView::default(),
+            loading: LoadingState::Loading { tick: 0 },
         }
+    }
+
+    /// Advance the spinner by one frame.
+    pub(super) fn spinner_tick(&mut self) {
+        if let LoadingState::Loading { tick } = &mut self.loading {
+            *tick = tick.wrapping_add(1);
+        }
+    }
+
+    /// Mark loading as complete — the normal UI will be rendered from now on.
+    /// Safe to call multiple times; subsequent calls are no-ops.
+    pub(super) fn finish_loading(&mut self) {
+        if matches!(self.loading, LoadingState::Done) {
+            return;
+        }
+        self.loading = LoadingState::Done;
+        // Jump straight to the Tree focus (single-spec feel).
+        self.focus = Focus::Tree;
+    }
+
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(self.loading, LoadingState::Loading { .. })
     }
 
     fn selected_spec_index(&self) -> usize {
@@ -477,6 +513,9 @@ impl ApinApp {
 
     /// Add a newly-loaded spec and build its tree cursor.  The spec-list
     /// selection is left unchanged so the user keeps their current context.
+    /// When the first spec arrives the loading screen is dismissed so the
+    /// user can start navigating immediately; remaining specs continue to
+    /// load in the background and are appended to the list as they arrive.
     pub(super) fn push_spec(&mut self, spec: Spec) {
         let path_strings: Vec<String> = spec.paths.iter().map(|p| p.path.clone()).collect();
         let root = build_tree(&path_strings);
@@ -484,9 +523,10 @@ impl ApinApp {
         cursor.open_next_level();
         self.trees.push(cursor);
         self.specs.push(spec);
-        // If this is the very first spec, select it.
+        // If this is the very first spec, select it and leave the loading screen.
         if self.specs.len() == 1 {
             self.specs_state.select(Some(0));
+            self.finish_loading();
         }
     }
 
@@ -822,6 +862,15 @@ impl ApinApp {
     // ─── Draw ─────────────────────────────────────────────────────────────────
 
     pub(super) fn draw(&mut self) -> anyhow::Result<()> {
+        if self.is_loading() {
+            let tick = match self.loading {
+                LoadingState::Loading { tick } => tick,
+                LoadingState::Done => unreachable!(),
+            };
+            self.terminal.draw(|frame| draw_loading(frame, tick))?;
+            return Ok(());
+        }
+
         // Destructure to avoid borrow conflict: `terminal` needs `&mut` for
         // `.draw()`, while the closure borrows the rest of the fields.
         let Self {
@@ -832,6 +881,7 @@ impl ApinApp {
             trees,
             ops,
             detail,
+            ..
         } = self;
 
         terminal.draw(|frame| {
@@ -839,6 +889,25 @@ impl ApinApp {
         })?;
         Ok(())
     }
+}
+
+fn draw_loading(frame: &mut Frame, tick: u8) {
+    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spinner = FRAMES[tick as usize % FRAMES.len()];
+    let text = format!("{} loading specs…", spinner);
+
+    let area = frame.area();
+    let y = area.height / 2;
+    let x = area.width.saturating_sub(text.chars().count() as u16) / 2;
+    let inner = Rect {
+        x,
+        y,
+        width: text.chars().count() as u16,
+        height: 1,
+    };
+
+    let msg = Paragraph::new(text.as_str()).style(Style::default().fg(Color::Gray));
+    frame.render_widget(msg, inner);
 }
 
 fn draw_frame(

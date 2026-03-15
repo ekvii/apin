@@ -7,7 +7,7 @@ use ratatui::{
 };
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
-use crate::universe::{SchemaKindHint, SchemaNode, Spec};
+use crate::spec::{SchemaKindHint, SchemaNode, Spec};
 
 use super::super::app::{OpsState, TreeCursor};
 

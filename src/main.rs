@@ -1,91 +1,53 @@
+mod inputs;
 mod parser;
+mod spec;
 mod tui;
-mod universe;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
-use async_walkdir::WalkDir;
+use anyhow::Result;
 use clap::Parser;
-use futures_util::{Stream, TryStreamExt, future, stream};
-use tokio::fs;
-use tokio::io::AsyncReadExt;
+use futures_util::StreamExt;
 
-use universe::load_spec;
+use inputs::resolve_inputs;
+use spec::load_spec;
 
 #[derive(Parser)]
 #[command(name = "apin", version)]
 struct Cli {
-    /// One or more OpenAPI spec files or directories to load.
+    /// One or more OpenAPI spec files, directories, or HTTP(S) URLs to load.
     /// Directories are scanned recursively for YAML files that contain
     /// a top-level `openapi:` field.
+    /// URLs are probed for well-known spec paths and downloaded to a local file.
     #[arg(required = true)]
-    paths: Vec<String>,
+    inputs: Vec<String>,
+
+    /// Directory where downloaded specs are stored.
+    /// Defaults to the system temporary directory.
+    /// A URL is not re-downloaded if its file already exists in this directory.
+    #[arg(long, value_name = "DIR")]
+    download_dir: Option<PathBuf>,
+
+    /// Re-download specs from URLs even if they already exist locally.
+    #[arg(long)]
+    force_download: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let specs = resolve_inputs(cli.paths)
-        .map_ok(load_spec)
-        .try_buffer_unordered(8);
-    tui::launch(specs).await
-}
 
-/// Resolves CLI inputs into a merged stream of recursively found OpenAPI spec paths.
-fn resolve_inputs(inputs: Vec<String>) -> impl Stream<Item = Result<String>> + Send + 'static {
-    let streams_of_spec_paths = inputs.into_iter().map(|input| {
-        let (is_file, is_dir) = {
-            let p = Path::new(&input);
-            (p.is_file(), p.is_dir())
-        };
-        if is_file {
-            // input is a spec file path
-            Box::pin(stream::once(future::ready(Ok(input))))
-        } else if is_dir {
-            // input is a directory with potential spec files
-            Box::pin(collect_openapi_files(input))
-        } else {
-            Box::pin(stream::once(future::ready(Err(anyhow!(
-                "'{}' not found — make sure the path is correct",
-                input
-            ))))) as std::pin::Pin<Box<dyn Stream<Item = Result<String>> + Send>>
-        }
-    });
-    stream::select_all(streams_of_spec_paths)
-}
+    let download_dir = cli
+        .download_dir
+        .unwrap_or_else(std::env::temp_dir);
 
-/// Recursively yields all OpenAPI spec files as a stream of paths.
-fn collect_openapi_files(root: String) -> impl Stream<Item = Result<String>> + Send + 'static {
-    WalkDir::new(&root)
-        .map_err(|e| anyhow!(e))
-        .try_filter_map(|entry| async move {
-            let path = entry.path();
-            if !is_yaml(&path) {
-                return Ok(None);
+    let specs = resolve_inputs(cli.inputs, download_dir, cli.force_download)
+        .filter_map(|result| async move {
+            match result {
+                Ok(path) => load_spec(path).await.ok(),
+                Err(_) => None,
             }
-            has_openapi_field(path).await
-        })
-}
+        });
 
-fn is_yaml(p: &std::path::Path) -> bool {
-    matches!(
-        p.extension().and_then(|e| e.to_str()).map(str::to_lowercase),
-        Some(s) if s == "yaml" || s == "yml"
-    )
-}
-
-/// Returns the path as a `String` if the file's first 4 KB contains a line starting with `openapi:`,
-/// or `None` otherwise.
-async fn has_openapi_field(path: PathBuf) -> Result<Option<String>> {
-    let path_str = path.to_str().map(str::to_string);
-    let mut reader = fs::File::open(&path)
-        .await
-        .map_err(|e| anyhow!(e).context(format!("cannot open '{}'", path_str.as_deref().unwrap_or_default())))?
-        .take(4096);
-    let mut buf = Vec::with_capacity(4096);
-    reader.read_to_end(&mut buf).await.map_err(|e| anyhow!(e))?;
-    let head = std::str::from_utf8(&buf).unwrap_or("");
-    let found = head.lines().any(|l| l.trim_start().starts_with("openapi:"));
-    Ok(found.then_some(path_str).flatten())
+    tui::run(specs).await
 }

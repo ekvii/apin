@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::universe::Spec;
+use crate::spec::Spec;
 
 use super::super::app::{Focus, OpsState, TreeCursor};
 use super::styles::{border_style, method_color, response_code_style, truncate};

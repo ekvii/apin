@@ -10,24 +10,25 @@ use crossterm::{
 };
 use futures_util::{Stream, StreamExt};
 use ratatui::{Terminal, backend::CrosstermBackend};
+use tokio::time::{Duration, interval};
 
-use crate::universe::Spec;
+use crate::spec::Spec;
 
 use app::ApinApp;
 use events::{Action, EventHandler};
 
-/// Terminal lifecycle management
-pub async fn launch(
-    specs: impl Stream<Item = anyhow::Result<Spec>> + Send + 'static,
-) -> Result<()> {
+/// Set up the terminal and run the TUI event loop.
+/// Specs are consumed from the stream as they arrive; the loading screen is
+/// shown until the first spec is received.
+pub async fn run(specs: impl Stream<Item = Spec> + Send + 'static) -> Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut out = std::io::stdout();
     execute!(out, EnterAlternateScreen).context("failed to enter alternate screen")?;
 
     let backend = CrosstermBackend::new(out);
     let terminal = Terminal::new(backend).context("failed to create terminal")?;
-
     let mut app = ApinApp::new(terminal);
+
     let result = event_loop(&mut app, specs).await;
 
     disable_raw_mode().context("failed to disable raw mode")?;
@@ -39,11 +40,12 @@ pub async fn launch(
 
 async fn event_loop(
     app: &mut ApinApp,
-    specs: impl Stream<Item = anyhow::Result<Spec>> + Send + 'static,
+    specs: impl Stream<Item = Spec> + Send + 'static,
 ) -> Result<()> {
     let mut handler = EventHandler::new();
     let mut events = EventStream::new();
     let mut specs_done = false;
+    let mut spinner = interval(Duration::from_millis(80));
 
     tokio::pin!(specs);
 
@@ -51,11 +53,15 @@ async fn event_loop(
         app.draw()?;
 
         tokio::select! {
+            // Advance the spinner frame.
+            _ = spinner.tick(), if app.is_loading() => {
+                app.spinner_tick();
+            }
+
             // A new spec arrived — push it into the app.
             result = specs.next(), if !specs_done => {
                 match result {
-                    Some(Ok(spec)) => { app.push_spec(spec); }
-                    Some(Err(_)) => {} // load error — skip
+                    Some(spec) => { app.push_spec(spec); }
                     None => { specs_done = true; }
                 }
             }

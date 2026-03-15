@@ -9,6 +9,8 @@ Browse any number of specs with a Miller-columns path tree, inspect endpoints in
 full-screen detail view, and filter with incremental search — all without leaving
 the terminal.
 
+Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
+
 ## Installation
 
 ### Homebrew (macOS and Linux)
@@ -21,6 +23,16 @@ brew install ekvii/apin/apin
 
 [Latest release binaries](https://github.com/ekvii/apin/releases/latest) are available for Linux, macOS, and Windows. Download the binary for your platform and add it to your `PATH`.
 
+### Build from source
+
+Requires [Rust](https://rustup.rs) (stable).
+
+```sh
+cd apin
+cargo build --release
+./target/release/apin path/to/spec.yaml
+```
+
 ## Usage
 
 ```sh
@@ -29,9 +41,19 @@ apin openapi.yaml
 
 # entire directory — specs stream into the UI as they load
 apin path/to/specs/
-```
 
-Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
+# HTTP(S) URL — probes well-known spec paths automatically
+apin https://api.example.com
+
+# explicit spec URL
+apin https://api.example.com/openapi.yaml
+
+# cache downloaded specs (re-uses existing files on next run)
+apin --download-dir . https://api.example.com
+
+# force re-download even if the file already exists
+apin --download-dir . --force-download https://api.example.com
+```
 
 ## Features
 
@@ -41,13 +63,5 @@ Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
 - **Incremental search** — `/` to filter in any panel; `n` / `N` to cycle matches
 - **Vim-style navigation** — `j`/`k`, `gg`/`G`, `Ctrl-D`/`Ctrl-U`
 - **Multi-spec** — load a whole directory; switch between specs in a sidebar
-
-## Build from source
-
-Requires [Rust](https://rustup.rs) (stable).
-
-```sh
-cd apin
-cargo build --release
-./target/release/apin path/to/spec.yaml
-```
+- **URL input** — pass any HTTP(S) URL; apin probes well-known spec paths automatically
+- **Download remote spec files** — `--download-dir` persists downloaded specs and skips re-downloading; use `--force-download` to override

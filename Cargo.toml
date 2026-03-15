@@ -1,6 +1,6 @@
 [package]
 name = "apin"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
@@ -21,8 +21,16 @@ async-walkdir = "2.1.0"
 # Parsing-related
 openapiv3  = "2"
 oas3       = { version = "0.20", features = ["yaml-spec"] }
-serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+serde_yaml = "0.9"
 
 # Utils
-reqwest    = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest    = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls     = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 indexmap = "2.13.0"
+
+[profile.release]
+strip         = true
+lto           = "thin"
+opt-level     = "z"
+codegen-units = 1
+panic         = "abort"

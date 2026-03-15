@@ -35,6 +35,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install ring crypto provider");
+
     let cli = Cli::parse();
 
     let download_dir = cli

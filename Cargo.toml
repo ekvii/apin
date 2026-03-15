@@ -1,7 +1,10 @@
 [package]
-name = "apin"
-version = "0.2.1"
-edition = "2024"
+name        = "apin"
+version     = "0.2.1"
+edition     = "2024"
+description = "Terminal UI for navigating OpenAPI specs"
+license     = "MIT"
+repository  = "https://github.com/ekvii/apin"
 
 [dependencies]
 anyhow     = "1"

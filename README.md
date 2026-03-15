@@ -21,6 +21,12 @@ Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
 brew install ekvii/apin/apin
 ```
 
+### cargo install
+
+```sh
+cargo install apin
+```
+
 ### Binaries (Linux, macOS, Windows)
 
 [Latest release binaries](https://github.com/ekvii/apin/releases/latest) are available for Linux, macOS, and Windows. Download the binary for your platform and add it to your `PATH`.

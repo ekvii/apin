@@ -298,7 +298,7 @@ fn draw_ops_column(
                 // For known methods (colored bg), dim the text to DarkGray.
                 // For unknown methods (DarkGray bg), keep fg as-is (White) —
                 // overriding to DarkGray would make the text invisible.
-                let known = matches!(method.as_ref(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE");
+                let known = matches!(*method, "GET" | "POST" | "PUT" | "PATCH" | "DELETE");
                 if known {
                     base.add_modifier(Modifier::CROSSED_OUT).fg(Color::DarkGray)
                 } else {

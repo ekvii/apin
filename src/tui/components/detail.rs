@@ -169,34 +169,34 @@ impl DetailView {
     }
 
     pub(crate) fn resp_tree_key_down(&mut self) {
-        if let Some(i) = self.focused_resp_tree {
-            if let Some(s) = self.resp_tree_states.get_mut(i) {
-                s.key_down();
-            }
+        if let Some(i) = self.focused_resp_tree
+            && let Some(s) = self.resp_tree_states.get_mut(i)
+        {
+            s.key_down();
         }
     }
 
     pub(crate) fn resp_tree_key_up(&mut self) {
-        if let Some(i) = self.focused_resp_tree {
-            if let Some(s) = self.resp_tree_states.get_mut(i) {
-                s.key_up();
-            }
+        if let Some(i) = self.focused_resp_tree
+            && let Some(s) = self.resp_tree_states.get_mut(i)
+        {
+            s.key_up();
         }
     }
 
     pub(crate) fn resp_tree_key_left(&mut self) {
-        if let Some(i) = self.focused_resp_tree {
-            if let Some(s) = self.resp_tree_states.get_mut(i) {
-                s.key_left();
-            }
+        if let Some(i) = self.focused_resp_tree
+            && let Some(s) = self.resp_tree_states.get_mut(i)
+        {
+            s.key_left();
         }
     }
 
     pub(crate) fn resp_tree_key_right(&mut self) {
-        if let Some(i) = self.focused_resp_tree {
-            if let Some(s) = self.resp_tree_states.get_mut(i) {
-                s.key_right();
-            }
+        if let Some(i) = self.focused_resp_tree
+            && let Some(s) = self.resp_tree_states.get_mut(i)
+        {
+            s.key_right();
         }
     }
 

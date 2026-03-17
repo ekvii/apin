@@ -430,10 +430,10 @@ fn parse_raw_request_body(
         })
         .and_then(|mt| mt.get("schema"));
 
-    let schema_tree = schema_val.and_then(|sv| {
+    let schema_tree = schema_val.map(|sv| {
         let resolved = resolve_refs_in_value(sv.clone(), schemas_value, &mut HashSet::new());
         let clean = strip_noise_keys(resolved);
-        Some(value_to_schema_node("body".to_string(), &clean, &HashSet::new()))
+        value_to_schema_node("body".to_string(), &clean, &HashSet::new())
     });
 
     let fields: Vec<BodyField> = schema_val

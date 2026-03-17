@@ -187,12 +187,35 @@ pub(crate) fn draw(
             .iter()
             .map(|(label, is_leaf)| {
                 // "." is a synthetic self-endpoint node — display it as "(self)"
-                // so the user understands it represents the parent path itself.
                 let display = if label == "." {
                     "(self)"
                 } else {
                     label.as_str()
                 };
+                // "__paths__" is a synthetic group node — render as "[PATHS]"
+                if label == "__paths__" {
+                    return ListItem::new(Line::from(vec![
+                        Span::styled(
+                            "[PATHS]",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" ›", Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+                // "__webhooks__" is a synthetic group node — render as "[WEBHOOKS]"
+                if label == "__webhooks__" {
+                    return ListItem::new(Line::from(vec![
+                        Span::styled(
+                            "[WEBHOOKS]",
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" ›", Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
                 if *is_leaf {
                     ListItem::new(Span::styled(display, Style::default().fg(Color::White)))
                 } else {
@@ -237,8 +260,8 @@ fn draw_ops_column(
     let spec_idx = specs_state.selected().unwrap_or(0);
     let is_ops_focused = *focus == Focus::Ops;
 
-    // Build filtered list: (original_op_index, method).
-    let filtered: Vec<(usize, &str)> = {
+    // Build filtered list: (original_op_index, method, deprecated).
+    let filtered: Vec<(usize, &str, bool)> = {
         let spec = match specs.get(spec_idx) {
             Some(s) => s,
             None => return,
@@ -256,7 +279,7 @@ fn draw_ops_column(
             .iter()
             .enumerate()
             .filter(|(_, op)| ops.search.matches(&op.method))
-            .map(|(i, op)| (i, op.method.as_str()))
+            .map(|(i, op)| (i, op.method.as_str(), op.deprecated))
             .collect()
     };
 
@@ -269,11 +292,29 @@ fn draw_ops_column(
 
     let items: Vec<ListItem> = filtered
         .iter()
-        .map(|(_, method)| {
-            ListItem::new(Line::from(vec![Span::styled(
-                format!(" {} ", method),
-                method_color(method).add_modifier(Modifier::BOLD),
-            )]))
+        .map(|(_, method, deprecated)| {
+            let base = method_color(method).add_modifier(Modifier::BOLD);
+            let style = if *deprecated {
+                // For known methods (colored bg), dim the text to DarkGray.
+                // For unknown methods (DarkGray bg), keep fg as-is (White) —
+                // overriding to DarkGray would make the text invisible.
+                let known = matches!(method.as_ref(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE");
+                if known {
+                    base.add_modifier(Modifier::CROSSED_OUT).fg(Color::DarkGray)
+                } else {
+                    base.add_modifier(Modifier::CROSSED_OUT)
+                }
+            } else {
+                base
+            };
+            let mut spans = vec![Span::styled(format!(" {} ", method), style)];
+            if *deprecated {
+                spans.push(Span::styled(
+                    " [deprecated]",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

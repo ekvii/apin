@@ -66,6 +66,8 @@ impl SchemaNode {}
 pub struct RequestBody {
     /// Optional description from the requestBody object itself.
     pub description: Option<String>,
+    /// Whether the request body is required.
+    pub required: bool,
     /// Top-level fields of the body schema (empty if the schema is a $ref
     /// that could not be resolved, or uses a non-object schema kind).
     pub fields: Vec<BodyField>,
@@ -81,6 +83,10 @@ pub struct Param {
     pub location: String,
     pub required: bool,
     pub description: Option<String>,
+    /// The schema type string, e.g. `"string"`, `"integer"`, `"boolean"`.
+    pub schema_type: Option<String>,
+    /// Whether this parameter is marked deprecated.
+    pub deprecated: bool,
 }
 
 /// One HTTP operation (GET, POST, …) on a path.
@@ -91,17 +97,37 @@ pub struct Operation {
     pub summary: Option<String>,
     pub description: Option<String>,
     pub operation_id: Option<String>,
+    /// Tags associated with this operation.
+    pub tags: Vec<String>,
+    /// Whether this operation is marked deprecated.
+    pub deprecated: bool,
     pub params: Vec<Param>,
     /// Parsed request body, if present.
     pub request_body: Option<RequestBody>,
-    /// HTTP status codes paired with their description, e.g. `[("200", Some("OK")), ("404", None)]`.
-    pub responses: Vec<(String, Option<String>)>,
+    /// HTTP status code responses with description and optional body schema.
+    pub responses: Vec<Response>,
+}
+
+/// One HTTP response entry with code, description and optional body schema.
+#[derive(Debug, Clone)]
+pub struct Response {
+    pub code: String,
+    pub description: Option<String>,
+    pub schema_tree: Option<SchemaNode>,
+}
+
+/// Whether a path entry is a regular HTTP path or a webhook.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PathKind {
+    Path,
+    Webhook,
 }
 
 /// One path entry: the path string plus all its operations.
 #[derive(Debug, Clone)]
 pub struct PathEntry {
     pub path: String,
+    pub kind: PathKind,
     pub operations: Vec<Operation>,
 }
 
@@ -141,10 +167,12 @@ pub fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<
                     parser::v30::parse(fp, content)
                 } else if version.starts_with("3.1") {
                     parser::v31::parse(fp, content)
+                } else if version.starts_with("3.2") {
+                    parser::v32::parse(fp, content)
                 } else {
                     bail!(
                         "'{}' uses unsupported OpenAPI version '{}' \
-                         (only 3.0.x and 3.1.x are supported)",
+                         (only 3.0.x, 3.1.x, and 3.2.x are supported)",
                         fp,
                         version
                     )

@@ -1,0 +1,261 @@
+openapi: "3.2.0"
+info:
+  title: Fixture API v3.2
+  version: "1.0.0"
+  description: Artificial OpenAPI 3.2 spec used by parser unit tests.
+
+tags:
+  - name: resources
+    description: Generic resource operations
+
+paths:
+  # ── Regular paths ────────────────────────────────────────────────────────────
+
+  /v1/resources:
+    get:
+      operationId: listResources
+      summary: List resources
+      description: Returns a paginated list of resources.
+      tags:
+        - resources
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          description: ID of the project to list resources for.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return.
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          required: false
+          description: Offset into the result set.
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceList"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      operationId: createResource
+      summary: Create a resource
+      description: Creates a new resource in the given project.
+      tags:
+        - resources
+      requestBody:
+        required: true
+        description: Resource creation parameters.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateResourceRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "400":
+          description: Bad Request
+
+  /v1/resources/{resourceId}:
+    get:
+      operationId: getResource
+      summary: Get a resource
+      description: Returns a single resource by ID.
+      tags:
+        - resources
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          description: The ID of the resource.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "404":
+          description: Not Found
+
+    delete:
+      operationId: deleteResource
+      summary: Delete a resource
+      tags:
+        - resources
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+
+    # ── 3.2 additionalOperations: custom HTTP methods ─────────────────────────
+    additionalOperations:
+      copy:
+        operationId: copyResource
+        summary: Copy a resource
+        description: >
+          Creates a copy of the resource at a new destination path.
+          Uses the WebDAV-style COPY method, formalized in OpenAPI 3.2
+          via additionalOperations.
+        tags:
+          - resources
+        parameters:
+          - name: resourceId
+            in: path
+            required: true
+            description: The ID of the resource to copy.
+            schema:
+              type: string
+          - name: destination
+            in: query
+            required: true
+            description: Destination path for the copy.
+            schema:
+              type: string
+        responses:
+          "201":
+            description: Copy created.
+          "404":
+            description: Source resource not found.
+
+      move:
+        operationId: moveResource
+        summary: Move a resource
+        description: >
+          Moves (renames) the resource to a new destination.
+          Deprecated in favour of the PATCH rename endpoint.
+        deprecated: true
+        tags:
+          - resources
+        parameters:
+          - name: resourceId
+            in: path
+            required: true
+            schema:
+              type: string
+          - name: destination
+            in: query
+            required: true
+            description: New destination path.
+            schema:
+              type: string
+        responses:
+          "204":
+            description: Move succeeded.
+          "404":
+            description: Resource not found.
+
+webhooks:
+  resource.created:
+    post:
+      operationId: onResourceCreated
+      summary: Resource created event
+      description: Fired when a new resource is successfully created.
+      tags:
+        - resources
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+      responses:
+        "200":
+          description: Webhook acknowledged.
+
+components:
+  schemas:
+    Resource:
+      type: object
+      required:
+        - id
+        - name
+        - projectId
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the resource.
+        name:
+          type: string
+          description: Human-readable name.
+        projectId:
+          type: string
+          description: ID of the project this resource belongs to.
+        description:
+          type: string
+          description: Optional description.
+        createdAt:
+          type: string
+          description: ISO-8601 creation timestamp.
+
+    ResourceList:
+      type: object
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          description: The page of Resource objects.
+          items:
+            $ref: "#/components/schemas/Resource"
+        total:
+          type: integer
+          description: Total number of resources matching the query.
+        nextOffset:
+          type: integer
+          description: Offset for the next page, if any.
+
+    CreateResourceRequest:
+      type: object
+      required:
+        - name
+        - projectId
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the resource.
+        projectId:
+          type: string
+          description: ID of the project this resource belongs to.
+        description:
+          type: string
+          description: Optional description.
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+        message:
+          type: string
+          description: Human-readable error message.

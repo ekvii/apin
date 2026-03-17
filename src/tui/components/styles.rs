@@ -26,7 +26,7 @@ pub(crate) fn method_color(method: &str) -> Style {
         "PUT" => Style::default().fg(Color::Black).bg(Color::Yellow),
         "PATCH" => Style::default().fg(Color::Black).bg(Color::Cyan),
         "DELETE" => Style::default().fg(Color::Black).bg(Color::Red),
-        _ => Style::default().fg(Color::Black).bg(Color::DarkGray),
+        _ => Style::default().fg(Color::White).bg(Color::DarkGray),
     }
 }
 

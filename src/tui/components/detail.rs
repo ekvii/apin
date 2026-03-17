@@ -7,7 +7,7 @@ use ratatui::{
 };
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
-use crate::spec::{SchemaKindHint, SchemaNode, Spec};
+use crate::spec::{PathKind, SchemaKindHint, SchemaNode, Spec};
 
 use super::super::app::{OpsState, TreeCursor};
 
@@ -43,13 +43,13 @@ impl Search {
 pub(crate) struct DetailView {
     /// Scroll offset (in virtual lines).
     pub(crate) scroll: usize,
-    /// Whether the cursor is currently inside the inline schema tree widget.
+    /// Whether the cursor is currently inside the request-body schema tree widget.
     pub(crate) in_tree: bool,
-    /// Virtual line index where the inline schema tree starts (cached from last draw).
+    /// Virtual line index where the request-body schema tree starts (cached from last draw).
     tree_start: usize,
-    /// Number of currently visible rows in the inline schema tree (cached from last draw).
+    /// Number of currently visible rows in the request-body schema tree (cached from last draw).
     tree_len: usize,
-    /// Fold/selection state for the schema tree widget.
+    /// Fold/selection state for the request-body schema tree widget.
     schema_tree_state: TreeState<usize>,
     /// The operation key for which `schema_tree_state` was last initialised.
     /// When it changes we reset the tree so nodes start collapsed.
@@ -62,6 +62,17 @@ pub(crate) struct DetailView {
     pub(crate) search_matches: Vec<usize>,
     /// Which match the cursor is currently on (index into `search_matches`).
     search_cursor: usize,
+
+    // ── Response schema trees ─────────────────────────────────────────────────
+    /// One `TreeState` per response that has a `schema_tree` (same order as
+    /// responses with schemas, indexed by their 1-based hotkey N-1).
+    resp_tree_states: Vec<TreeState<usize>>,
+    /// Virtual start line of each response tree slot (cached from last draw).
+    resp_tree_starts: Vec<usize>,
+    /// Visible row-count of each response tree slot (cached from last draw).
+    resp_tree_lens: Vec<usize>,
+    /// Index into `resp_tree_states` that currently has keyboard focus, or `None`.
+    pub(crate) focused_resp_tree: Option<usize>,
 }
 
 impl DetailView {
@@ -75,6 +86,10 @@ impl DetailView {
             self.in_tree = false;
             self.tree_start = 0;
             self.tree_len = 0;
+            self.resp_tree_states.clear();
+            self.resp_tree_starts.clear();
+            self.resp_tree_lens.clear();
+            self.focused_resp_tree = None;
         }
     }
 
@@ -87,6 +102,7 @@ impl DetailView {
     pub(crate) fn back(&mut self) {
         self.scroll = 0;
         self.in_tree = false;
+        self.focused_resp_tree = None;
     }
 
     pub(crate) fn scroll_down(&mut self, n: usize) {
@@ -124,6 +140,64 @@ impl DetailView {
 
     pub(crate) fn unfocus_tree(&mut self) {
         self.in_tree = false;
+    }
+
+    // ── Response tree focus / navigation ─────────────────────────────────────
+
+    /// Returns `true` if any response tree currently has keyboard focus.
+    pub(crate) fn in_resp_tree(&self) -> bool {
+        self.focused_resp_tree.is_some()
+    }
+
+    /// Focus response tree `idx` (0-based, matching the 1-based hotkey digit).
+    /// Ignored if `idx` is out of range.
+    pub(crate) fn focus_resp_tree(&mut self, idx: usize) {
+        if idx < self.resp_tree_states.len() {
+            self.focused_resp_tree = Some(idx);
+            self.in_tree = false;
+            self.resp_tree_states[idx].select_first();
+            // Scroll the viewport so the focused tree is visible.
+            if idx < self.resp_tree_starts.len() {
+                self.scroll = self.resp_tree_starts[idx];
+            }
+        }
+    }
+
+    /// Remove focus from whatever response tree is currently focused.
+    pub(crate) fn unfocus_resp_tree(&mut self) {
+        self.focused_resp_tree = None;
+    }
+
+    pub(crate) fn resp_tree_key_down(&mut self) {
+        if let Some(i) = self.focused_resp_tree {
+            if let Some(s) = self.resp_tree_states.get_mut(i) {
+                s.key_down();
+            }
+        }
+    }
+
+    pub(crate) fn resp_tree_key_up(&mut self) {
+        if let Some(i) = self.focused_resp_tree {
+            if let Some(s) = self.resp_tree_states.get_mut(i) {
+                s.key_up();
+            }
+        }
+    }
+
+    pub(crate) fn resp_tree_key_left(&mut self) {
+        if let Some(i) = self.focused_resp_tree {
+            if let Some(s) = self.resp_tree_states.get_mut(i) {
+                s.key_left();
+            }
+        }
+    }
+
+    pub(crate) fn resp_tree_key_right(&mut self) {
+        if let Some(i) = self.focused_resp_tree {
+            if let Some(s) = self.resp_tree_states.get_mut(i) {
+                s.key_right();
+            }
+        }
     }
 
     // ── Schema tree navigation ────────────────────────────────────────────────
@@ -297,6 +371,12 @@ impl DetailView {
             None => return,
         };
 
+        let is_webhook = specs
+            .get(spec_idx)
+            .and_then(|s| s.paths.get(path_idx))
+            .map(|e| e.kind == PathKind::Webhook)
+            .unwrap_or(false);
+
         // ── Determine if we have a schema tree to show ────────────────────────
         let has_schema = op
             .request_body
@@ -312,16 +392,48 @@ impl DetailView {
 
         // ┌─ METHOD  PATH ──────────────────────────────────────────────────────┐
         let badge_style = method_color(&op.method).add_modifier(Modifier::BOLD);
-        lines.push(Line::from(vec![
+        let mut title_line = vec![
             Span::styled(format!(" {} ", op.method), badge_style),
             Span::raw("  "),
-            Span::styled(
-                path_str.clone(),
+        ];
+        // Gap A: [WH] tag for webhook entries
+        if is_webhook {
+            title_line.push(Span::styled(
+                "[WH] ",
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+            ));
+        }
+        title_line.push(Span::styled(
+            path_str.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+        // Gap C: [DEPRECATED] badge for the operation
+        if op.deprecated {
+            title_line.push(Span::raw("  "));
+            title_line.push(Span::styled(
+                "[deprecated]",
+                Style::default().fg(Color::LightRed),
+            ));
+        }
+        lines.push(Line::from(title_line));
+
+        // Gap B: tags chips
+        if !op.tags.is_empty() {
+            let mut tag_spans: Vec<Span> = vec![Span::raw("  ")];
+            for tag in &op.tags {
+                tag_spans.push(Span::styled(
+                    format!("[{}]", tag),
+                    Style::default().fg(Color::Cyan),
+                ));
+                tag_spans.push(Span::raw("  "));
+            }
+            lines.push(Line::from(tag_spans));
+        }
         lines.push(Line::raw(""));
 
         // ── Summary ───────────────────────────────────────────────────────────
@@ -404,45 +516,47 @@ impl DetailView {
 
                 // Column headers
                 lines.push(Line::from(vec![Span::styled(
-                    "    name                 type       req   description",
+                    "    name                 type       tags   description",
                     Style::default().fg(Color::DarkGray),
                 )]));
 
                 for p in &group {
-                    let name_style = if p.required {
+                    let name_style = if p.deprecated {
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::CROSSED_OUT)
+                    } else if p.required {
                         Style::default()
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Gray)
                     };
-                    let req_span = if p.required {
-                        Span::styled(
-                            " yes  ",
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Span::styled(" no   ", Style::default().fg(Color::DarkGray))
-                    };
-                    let name_padded = format!(
-                        "{:<22}",
-                        if p.required {
-                            format!("{}*", p.name)
-                        } else {
-                            p.name.clone()
-                        }
-                    );
+                    let name_padded = format!("{:<22}", p.name.clone());
+                    // Bug E: use actual schema type instead of hardcoded "string"
+                    let type_str = p.schema_type.as_deref().unwrap_or("string");
                     let mut param_row = vec![
                         Span::raw("    "),
                         Span::styled(name_padded, name_style),
                         Span::styled(
-                            format!("{:<10} ", "string"),
-                            Style::default().fg(Color::DarkGray),
+                            format!("{:<10} ", type_str),
+                            Style::default().fg(Color::Blue),
                         ),
-                        req_span,
                     ];
+                    if p.required {
+                        param_row.push(Span::styled(
+                            "[required]",
+                            Style::default().fg(Color::Red),
+                        ));
+                        param_row.push(Span::raw(" "));
+                    }
+                    if p.deprecated {
+                        param_row.push(Span::styled(
+                            "[deprecated]",
+                            Style::default().fg(Color::LightRed),
+                        ));
+                        param_row.push(Span::raw(" "));
+                    }
                     if let Some(ref desc) = p.description {
                         param_row
                             .push(Span::styled(desc.clone(), Style::default().fg(Color::Gray)));
@@ -472,12 +586,26 @@ impl DetailView {
                 divider.clone(),
                 Style::default().fg(Color::DarkGray),
             )));
-            lines.push(Line::from(Span::styled(
-                "  REQUEST BODY",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            // Gap M: show (required) / (optional) in REQUEST BODY header
+            let req_label = if rb.required {
+                Span::styled(
+                    " (required)",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled(" (optional)", Style::default().fg(Color::DarkGray))
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  REQUEST BODY",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                req_label,
+            ]));
             lines.push(Line::raw(""));
 
             if let Some(ref desc) = rb.description {
@@ -512,7 +640,44 @@ impl DetailView {
             }
         }
 
-        // ── Responses (lines_below) ───────────────────────────────────────────
+        // ── Responses ────────────────────────────────────────────────────────
+        // Build per-response schema tree children (only for responses that have
+        // a schema_tree).  We assign a 1-based hotkey to each such response in
+        // the order they appear.
+        struct RespTreeSlot {
+            /// Index into `op.responses` this slot belongs to.
+            resp_idx: usize,
+            /// 1-based hotkey digit shown in the hint (1, 2, 3, …).
+            hotkey: usize,
+            owned_children: Vec<SchemaNode>,
+            id_start: usize,
+        }
+
+        let mut resp_tree_slots: Vec<RespTreeSlot> = Vec::new();
+        {
+            let mut hotkey = 1usize;
+            for (resp_idx, resp) in op.responses.iter().enumerate() {
+                if let Some(node) = resp.schema_tree.as_ref() {
+                    let (_, ch, id_start) = schema_effective_roots(node);
+                    resp_tree_slots.push(RespTreeSlot {
+                        resp_idx,
+                        hotkey,
+                        owned_children: ch.to_vec(),
+                        id_start,
+                    });
+                    hotkey += 1;
+                }
+            }
+        }
+
+        // Ensure we have enough TreeState slots (grow on demand, never shrink
+        // within an operation — sync_schema_tree resets on op change).
+        while self.resp_tree_states.len() < resp_tree_slots.len() {
+            self.resp_tree_states.push(TreeState::default());
+        }
+
+        // Build the responses text lines.  For responses that have a schema tree
+        // we embed a hotkey hint on the response row instead of static lines.
         let mut lines_below: Vec<Line> = Vec::new();
 
         if !op.responses.is_empty() {
@@ -537,23 +702,55 @@ impl DetailView {
                 Style::default().fg(Color::DarkGray),
             )));
 
-            for (code, desc) in &op.responses {
+            // Assign hotkeys by matching slots
+            let hotkey_for_resp: std::collections::HashMap<usize, usize> = resp_tree_slots
+                .iter()
+                .map(|s| (s.resp_idx, s.hotkey))
+                .collect();
+
+            for (resp_idx, resp) in op.responses.iter().enumerate() {
                 let badge = Span::styled(
-                    format!(" {} ", code),
-                    response_code_style(code).add_modifier(Modifier::BOLD),
+                    format!(" {} ", resp.code),
+                    response_code_style(&resp.code).add_modifier(Modifier::BOLD),
                 );
-                let desc_span = if let Some(d) = desc {
+                let desc_span = if let Some(ref d) = resp.description {
                     Span::styled(format!("  {}", d), Style::default().fg(Color::Gray))
                 } else {
                     Span::raw("")
                 };
-                target.push(Line::from(vec![Span::raw("    "), badge, desc_span]));
+                let mut row = vec![Span::raw("    "), badge, desc_span];
+
+                // If this response has a schema tree, show the hotkey hint.
+                if let Some(&hk) = hotkey_for_resp.get(&resp_idx) {
+                    row.push(Span::raw("  "));
+                    row.push(Span::styled(
+                        format!("[{}]", hk),
+                        Style::default().fg(Color::Yellow),
+                    ));
+                    row.push(Span::styled(
+                        " schema",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                target.push(Line::from(row));
             }
             target.push(Line::raw(""));
         }
 
         // ── Virtual scroll layout ─────────────────────────────────────────────
-        let tree_len: usize = if !owned_effective_children.is_empty() {
+        // Layout (virtual line order):
+        //   lines_above  (text lines before req-body tree)
+        //   [req_body_tree if has_schema]
+        //   lines_below  (responses text block, possibly at beginning of lines)
+        //   [resp_tree_0]
+        //   [resp_tree_1]
+        //   ...
+        //   [resp_tree_N]
+        //
+        // Note: when !has_schema, responses go into `lines` (not lines_below),
+        // so `lines_below` is empty and resp trees appear after `lines`.
+
+        let req_tree_len: usize = if !owned_effective_children.is_empty() {
             let opened = self.schema_tree_state.opened().clone();
             count_visible_tree_rows(&owned_effective_children, tree_id_start, &opened)
         } else {
@@ -561,11 +758,50 @@ impl DetailView {
         };
 
         let lines_above_len = lines.len();
-        let tree_start = lines_above_len;
-        let tree_end = tree_start + tree_len;
+        let req_tree_start = lines_above_len;
+        let req_tree_end = req_tree_start + req_tree_len;
 
-        self.tree_start = tree_start;
-        self.tree_len = tree_len;
+        self.tree_start = req_tree_start;
+        self.tree_len = req_tree_len;
+
+        let below_start = req_tree_end;
+        let below_end = below_start + lines_below.len();
+
+        // Compute each response tree's row count and virtual start.
+        // Only the focused slot occupies space; all others are hidden (len = 0).
+        let mut resp_tree_lens_new: Vec<usize> = Vec::new();
+        let mut resp_tree_starts_new: Vec<usize> = Vec::new();
+        let mut cursor = below_end;
+        for (slot_idx, slot) in resp_tree_slots.iter().enumerate() {
+            let is_focused = self.focused_resp_tree == Some(slot_idx);
+            let len = if !is_focused || slot.owned_children.is_empty() {
+                0
+            } else {
+                let opened = if let Some(s) = self.resp_tree_states.get(slot_idx) {
+                    s.opened().clone()
+                } else {
+                    Default::default()
+                };
+                count_visible_tree_rows(&slot.owned_children, slot.id_start, &opened)
+            };
+            resp_tree_starts_new.push(cursor);
+            resp_tree_lens_new.push(len);
+            cursor += len;
+        }
+        let total_virtual = cursor;
+
+        // If a resp tree is focused, reserve blank padding lines after it.
+        const FOOTER_PAD: usize = 3;
+        let resp_tree_pad_start = total_virtual;
+        let total_virtual = if self.focused_resp_tree.is_some() && resp_tree_lens_new.iter().any(|&l| l > 0) {
+            total_virtual + FOOTER_PAD
+        } else {
+            total_virtual
+        };
+
+        // Write back cached positions (needed by focus_resp_tree scroll jump).
+        self.resp_tree_starts = resp_tree_starts_new.clone();
+        self.resp_tree_lens = resp_tree_lens_new.clone();
 
         if !self.search.query.is_empty() {
             let q = self.search.query.to_ascii_lowercase();
@@ -575,7 +811,6 @@ impl DetailView {
                 .filter(|(_, l)| line_plain_text(l).to_ascii_lowercase().contains(&q))
                 .map(|(i, _)| i)
                 .collect();
-            let below_start = tree_end;
             for (i, l) in lines_below.iter().enumerate() {
                 if line_plain_text(l).to_ascii_lowercase().contains(&q) {
                     matches.push(below_start + i);
@@ -592,14 +827,18 @@ impl DetailView {
             self.search_cursor = 0;
         }
 
-        let total_virtual = tree_end + lines_below.len();
-
-        let in_tree_indicator = if self.in_tree { "●" } else { "○" };
+        let in_tree_indicator = if self.in_tree {
+            "●"
+        } else if self.focused_resp_tree.is_some() {
+            "◆"
+        } else {
+            "○"
+        };
         let search_indicator = if !self.search.query.is_empty() {
-            let cursor = if self.search.active { "_" } else { "" };
+            let cursor_sym = if self.search.active { "_" } else { "" };
             let n = self.search_matches.len();
             let cur = if n > 0 { self.search_cursor + 1 } else { 0 };
-            format!("  /{}{} [{}/{}]", self.search.query, cursor, cur, n)
+            format!("  /{}{} [{}/{}]", self.search.query, cursor_sym, cur, n)
         } else if self.search.active {
             "  /_".to_string()
         } else {
@@ -642,10 +881,13 @@ impl DetailView {
         let scroll = self.scroll;
         let view_end = scroll + view_h;
 
-        if tree_len == 0 || !has_schema {
+        // ── Fast path: no tree widgets at all ─────────────────────────────────
+        let any_req_tree = req_tree_len > 0 && has_schema;
+        let any_resp_tree = resp_tree_lens_new.iter().any(|&l| l > 0);
+
+        if !any_req_tree && !any_resp_tree {
             let matches = self.search_matches.clone();
-            let mut combined: Vec<Line> =
-                lines.into_iter().chain(lines_below).collect();
+            let mut combined: Vec<Line> = lines.into_iter().chain(lines_below).collect();
             highlight_matched_lines(&mut combined, 0, &matches);
             let para = Paragraph::new(combined)
                 .wrap(Wrap { trim: false })
@@ -654,19 +896,44 @@ impl DetailView {
             return;
         }
 
-        // ── Tree is present: compute split layout ─────────────────────────────
-        let above_rows = if scroll < tree_start {
-            (tree_start - scroll).min(view_h)
-        } else {
-            0
-        };
-        let tree_visible_start = tree_start.max(scroll);
-        let tree_visible_end = tree_end.min(view_end);
-        let tree_rows = tree_visible_end.saturating_sub(tree_visible_start);
-        let below_rows = view_h.saturating_sub(above_rows + tree_rows);
+        // ── Build the ordered list of layout segments ─────────────────────────
+        // Each segment is: (virtual_start, virtual_end, SegmentKind)
+        enum Seg {
+            TextAbove,
+            ReqTree,
+            TextBelow,
+            RespTree(usize), // slot index
+            Pad,             // blank trailing lines after focused resp tree
+        }
 
-        if !self.in_tree && tree_rows > 0 {
-            let desired_offset = scroll.saturating_sub(tree_start);
+        let mut segments: Vec<(usize, usize, Seg)> = Vec::new();
+        if lines_above_len > 0 {
+            segments.push((0, lines_above_len, Seg::TextAbove));
+        }
+        if any_req_tree {
+            segments.push((req_tree_start, req_tree_end, Seg::ReqTree));
+        }
+        if !lines_below.is_empty() {
+            segments.push((below_start, below_end, Seg::TextBelow));
+        }
+        for (i, (&start, &len)) in resp_tree_starts_new
+            .iter()
+            .zip(resp_tree_lens_new.iter())
+            .enumerate()
+        {
+            if len > 0 {
+                segments.push((start, start + len, Seg::RespTree(i)));
+            }
+        }
+        // Blank padding after the focused resp tree (so there is space between
+        // the last tree row and the bottom border).
+        if resp_tree_pad_start < total_virtual {
+            segments.push((resp_tree_pad_start, total_virtual, Seg::Pad));
+        }
+
+        // Passive scroll sync for req-body tree (unchanged logic).
+        if !self.in_tree && any_req_tree {
+            let desired_offset = scroll.saturating_sub(req_tree_start);
             let current_offset = self.schema_tree_state.get_offset();
             if desired_offset > current_offset {
                 self.schema_tree_state
@@ -677,15 +944,16 @@ impl DetailView {
             }
         }
 
+        // ── Build ratatui constraints ─────────────────────────────────────────
         let mut constraints: Vec<Constraint> = Vec::new();
-        if above_rows > 0 {
-            constraints.push(Constraint::Length(above_rows as u16));
-        }
-        if tree_rows > 0 {
-            constraints.push(Constraint::Length(tree_rows as u16));
-        }
-        if below_rows > 0 {
-            constraints.push(Constraint::Length(below_rows as u16));
+        for (vstart, vend, _) in &segments {
+            let seg_len = *vend - *vstart;
+            let visible_start = (*vstart).max(scroll);
+            let visible_end = (*vend).min(view_end);
+            let rows = visible_end.saturating_sub(visible_start).min(seg_len);
+            if rows > 0 {
+                constraints.push(Constraint::Length(rows as u16));
+            }
         }
         if constraints.is_empty() {
             return;
@@ -699,70 +967,117 @@ impl DetailView {
         let matches = self.search_matches.clone();
         let mut rect_idx = 0usize;
 
-        // ── Render lines_above ────────────────────────────────────────────────
-        if above_rows > 0 {
-            let above_scroll = scroll;
-            highlight_matched_lines(&mut lines, 0, &matches);
-            let para = Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .scroll((above_scroll as u16, 0));
-            frame.render_widget(para, rects[rect_idx]);
+        for (vstart, vend, seg) in segments {
+            let visible_start = vstart.max(scroll);
+            let visible_end = vend.min(view_end);
+            let rows = visible_end.saturating_sub(visible_start);
+            if rows == 0 {
+                continue;
+            }
+            let rect = rects[rect_idx];
             rect_idx += 1;
-        }
 
-        // ── Render tree widget ────────────────────────────────────────────────
-        if tree_rows > 0 {
-            let tree_items =
-                schema_children_to_tree_items(&owned_effective_children, tree_id_start);
-            let in_tree = self.in_tree;
-            let tree_block = Block::default()
-                .borders(Borders::LEFT)
-                .border_style(if in_tree {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                });
-
-            match Tree::new(&tree_items) {
-                Ok(tree_widget) => {
-                    let tree_widget = tree_widget
-                        .block(tree_block)
-                        .highlight_style(if in_tree {
-                            Style::default()
-                                .bg(Color::Cyan)
-                                .fg(Color::Black)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().bg(Color::DarkGray).fg(Color::White)
-                        })
-                        .highlight_symbol("  ");
-                    frame.render_stateful_widget(
-                        tree_widget,
-                        rects[rect_idx],
-                        &mut self.schema_tree_state,
-                    );
+            match seg {
+                Seg::TextAbove => {
+                    highlight_matched_lines(&mut lines, 0, &matches);
+                    let para = Paragraph::new(lines.clone())
+                        .wrap(Wrap { trim: false })
+                        .scroll((scroll as u16, 0));
+                    frame.render_widget(para, rect);
                 }
-                Err(_) => {
-                    frame.render_widget(
-                        Paragraph::new(Span::styled(
-                            "(schema display error)",
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                        rects[rect_idx],
-                    );
+                Seg::TextBelow => {
+                    let below_scroll = scroll.saturating_sub(below_start);
+                    highlight_matched_lines(&mut lines_below, below_start, &matches);
+                    let para = Paragraph::new(lines_below.clone())
+                        .wrap(Wrap { trim: false })
+                        .scroll((below_scroll as u16, 0));
+                    frame.render_widget(para, rect);
+                }
+                Seg::ReqTree => {
+                    let tree_items =
+                        schema_children_to_tree_items(&owned_effective_children, tree_id_start);
+                    let in_tree = self.in_tree;
+                    let tree_block = Block::default()
+                        .borders(Borders::LEFT)
+                        .border_style(if in_tree {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        });
+                    match Tree::new(&tree_items) {
+                        Ok(tree_widget) => {
+                            let tree_widget = tree_widget
+                                .block(tree_block)
+                                .highlight_style(if in_tree {
+                                    Style::default()
+                                        .bg(Color::Cyan)
+                                        .fg(Color::Black)
+                                        .add_modifier(Modifier::BOLD)
+                                } else {
+                                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                                })
+                                .highlight_symbol("  ");
+                            frame.render_stateful_widget(
+                                tree_widget,
+                                rect,
+                                &mut self.schema_tree_state,
+                            );
+                        }
+                        Err(_) => {
+                            frame.render_widget(
+                                Paragraph::new(Span::styled(
+                                    "(schema display error)",
+                                    Style::default().fg(Color::DarkGray),
+                                )),
+                                rect,
+                            );
+                        }
+                    }
+                }
+                Seg::RespTree(slot_idx) => {
+                    let slot = &resp_tree_slots[slot_idx];
+                    let tree_items =
+                        schema_children_to_tree_items(&slot.owned_children, slot.id_start);
+                    let is_focused = self.focused_resp_tree == Some(slot_idx);
+                    let tree_block = Block::default()
+                        .borders(Borders::LEFT)
+                        .border_style(if is_focused {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        });
+                    if let Some(state) = self.resp_tree_states.get_mut(slot_idx) {
+                        match Tree::new(&tree_items) {
+                            Ok(tree_widget) => {
+                                let tree_widget = tree_widget
+                                    .block(tree_block)
+                                    .highlight_style(if is_focused {
+                                        Style::default()
+                                            .bg(Color::Green)
+                                            .fg(Color::Black)
+                                            .add_modifier(Modifier::BOLD)
+                                    } else {
+                                        Style::default().bg(Color::DarkGray).fg(Color::White)
+                                    })
+                                    .highlight_symbol("  ");
+                                frame.render_stateful_widget(tree_widget, rect, state);
+                            }
+                            Err(_) => {
+                                frame.render_widget(
+                                    Paragraph::new(Span::styled(
+                                        "(schema display error)",
+                                        Style::default().fg(Color::DarkGray),
+                                    )),
+                                    rect,
+                                );
+                            }
+                        }
+                    }
+                }
+                Seg::Pad => {
+                    frame.render_widget(Paragraph::new(""), rect);
                 }
             }
-            rect_idx += 1;
-        }
-
-        // ── Render lines_below ────────────────────────────────────────────────
-        if below_rows > 0 {
-            let below_scroll = scroll.saturating_sub(tree_end);
-            highlight_matched_lines(&mut lines_below, tree_end, &matches);
-            let para = Paragraph::new(lines_below)
-                .wrap(Wrap { trim: false })
-                .scroll((below_scroll as u16, 0));
-            frame.render_widget(para, rects[rect_idx]);
         }
     }
 }
@@ -829,11 +1144,10 @@ fn schema_node_to_tree_item(node: &SchemaNode, counter: &mut usize) -> TreeItem<
     *counter += 1;
 
     let kind_label = node.kind.label();
-    let req_marker = if node.required { "*" } else { "" };
 
     let mut spans: Vec<Span<'static>> = vec![
         Span::styled(
-            format!("{}{}", node.label.clone(), req_marker),
+            node.label.clone(),
             if node.required {
                 Style::default()
                     .fg(Color::White)
@@ -844,9 +1158,17 @@ fn schema_node_to_tree_item(node: &SchemaNode, counter: &mut usize) -> TreeItem<
         ),
         Span::styled(
             format!("  {}", kind_label),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Blue),
         ),
     ];
+
+    if node.required {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "[required]",
+            Style::default().fg(Color::Red),
+        ));
+    }
 
     if let Some(ref desc) = node.description {
         spans.push(Span::styled(
@@ -954,7 +1276,7 @@ fn method_color(method: &str) -> Style {
         "PUT" => Style::default().fg(Color::Black).bg(Color::Yellow),
         "PATCH" => Style::default().fg(Color::Black).bg(Color::Cyan),
         "DELETE" => Style::default().fg(Color::Black).bg(Color::Red),
-        _ => Style::default().fg(Color::Black).bg(Color::DarkGray),
+        _ => Style::default().fg(Color::White).bg(Color::DarkGray),
     }
 }
 

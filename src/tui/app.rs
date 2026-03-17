@@ -8,7 +8,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::spec::Spec;
+use crate::spec::{PathKind, Spec};
 
 use super::components::detail::{DetailView, Search};
 use super::components::path_tree::{build_tree, PathNode};
@@ -517,7 +517,35 @@ impl ApinApp {
     /// user can start navigating immediately; remaining specs continue to
     /// load in the background and are appended to the list as they arrive.
     pub(super) fn push_spec(&mut self, spec: Spec) {
-        let path_strings: Vec<String> = spec.paths.iter().map(|p| p.path.clone()).collect();
+        // Build synthetic path strings for the trie.
+        //
+        // When both regular paths and webhooks are present we add a top-level
+        // type selector in the first column by prefixing every entry:
+        //   - Regular paths  → "/__paths__/<original-path>"
+        //   - Webhooks       → "/__webhooks__/<name>"
+        //
+        // When only one kind is present we skip the extra level so the tree
+        // jumps straight into path segments (current behaviour):
+        //   - Only paths     → "<original-path>"  (unchanged)
+        //   - Only webhooks  → "/__webhooks__/<name>"
+        let has_paths = spec.paths.iter().any(|p| p.kind == PathKind::Path);
+        let has_webhooks = spec.paths.iter().any(|p| p.kind == PathKind::Webhook);
+        let mixed = has_paths && has_webhooks;
+
+        let path_strings: Vec<String> = spec
+            .paths
+            .iter()
+            .map(|p| match p.kind {
+                PathKind::Path => {
+                    if mixed {
+                        format!("/__paths__{}", p.path)
+                    } else {
+                        p.path.clone()
+                    }
+                }
+                PathKind::Webhook => format!("/__webhooks__/{}", p.path),
+            })
+            .collect();
         let root = build_tree(&path_strings);
         let mut cursor = TreeCursor::new(root);
         cursor.open_next_level();
@@ -823,6 +851,37 @@ impl ApinApp {
 
     pub(super) fn schema_tree_key_right(&mut self) {
         self.detail.schema_tree_key_right();
+    }
+
+    // ── Response tree focus / navigation ──────────────────────────────────────
+
+    pub(super) fn detail_in_resp_tree(&self) -> bool {
+        self.detail.in_resp_tree()
+    }
+
+    /// Focus the `idx`-th response tree (0-based; hotkey = idx + 1).
+    pub(super) fn detail_focus_resp_tree(&mut self, idx: usize) {
+        self.detail.focus_resp_tree(idx);
+    }
+
+    pub(super) fn detail_unfocus_resp_tree(&mut self) {
+        self.detail.unfocus_resp_tree();
+    }
+
+    pub(super) fn resp_tree_key_down(&mut self) {
+        self.detail.resp_tree_key_down();
+    }
+
+    pub(super) fn resp_tree_key_up(&mut self) {
+        self.detail.resp_tree_key_up();
+    }
+
+    pub(super) fn resp_tree_key_left(&mut self) {
+        self.detail.resp_tree_key_left();
+    }
+
+    pub(super) fn resp_tree_key_right(&mut self) {
+        self.detail.resp_tree_key_right();
     }
 
     // ── Detail search ─────────────────────────────────────────────────────────

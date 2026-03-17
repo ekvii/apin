@@ -117,6 +117,29 @@ fn handle_search_key(app: &mut ApinApp, key: KeyEvent) -> Action {
 // ─── Detail full-screen mode ──────────────────────────────────────────────────
 
 fn handle_detail_key(app: &mut ApinApp, key: KeyEvent, pending_g: &mut bool) -> Action {
+    // ── Response schema tree focused ──────────────────────────────────────────
+    if app.detail_in_resp_tree() {
+        match key.code {
+            KeyCode::Char('f') => app.detail_unfocus_resp_tree(),
+            KeyCode::Char(c @ '1'..='9') => {
+                // Same digit again → unfocus; different digit → switch focus.
+                let idx = (c as usize) - ('1' as usize);
+                if app.detail.focused_resp_tree == Some(idx) {
+                    app.detail_unfocus_resp_tree();
+                } else {
+                    app.detail_focus_resp_tree(idx);
+                }
+            }
+            KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('j') | KeyCode::Down => app.resp_tree_key_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.resp_tree_key_up(),
+            KeyCode::Char('h') | KeyCode::Left => app.resp_tree_key_left(),
+            KeyCode::Char('l') | KeyCode::Right => app.resp_tree_key_right(),
+            _ => {}
+        }
+        return Action::Continue;
+    }
+
     if app.detail_in_tree() {
         match key.code {
             KeyCode::Char('f') => app.detail_unfocus_tree(),
@@ -145,6 +168,10 @@ fn handle_detail_key(app: &mut ApinApp, key: KeyEvent, pending_g: &mut bool) -> 
             KeyCode::Char('N') => app.detail_search_prev(),
             KeyCode::Char('g') => *pending_g = true,
             KeyCode::Char('G') => app.detail_scroll_bottom(),
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                app.detail_focus_resp_tree(idx);
+            }
             _ => {}
         }
     }

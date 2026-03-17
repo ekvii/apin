@@ -188,21 +188,24 @@ pub(crate) fn draw(
                 if i > 0 {
                     param_line.push(Span::raw("  "));
                 }
-                let name_style = if p.required {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
                 param_line.push(Span::styled(
-                    if p.required {
-                        format!("{}*", p.name)
-                    } else {
-                        p.name.clone()
-                    },
-                    name_style,
+                    p.name.clone(),
+                    Style::default().fg(Color::Yellow),
                 ));
+                if p.required {
+                    param_line.push(Span::raw(" "));
+                    param_line.push(Span::styled(
+                        "[required]",
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+                if p.deprecated {
+                    param_line.push(Span::raw(" "));
+                    param_line.push(Span::styled(
+                        "[deprecated]",
+                        Style::default().fg(Color::LightRed),
+                    ));
+                }
                 if let Some(ref desc) = p.description {
                     param_line.push(Span::styled(
                         format!(" ({})", truncate(desc, 30)),
@@ -240,12 +243,12 @@ pub(crate) fn draw(
             Span::raw("  "),
             Span::styled("responses", Style::default().fg(Color::DarkGray)),
         ]));
-        for (code, desc) in &op.responses {
+        for resp in &op.responses {
             let mut resp_line = vec![
                 Span::raw("    "),
-                Span::styled(format!(" {} ", code), response_code_style(code)),
+                Span::styled(format!(" {} ", resp.code), response_code_style(&resp.code)),
             ];
-            if let Some(d) = desc {
+            if let Some(ref d) = resp.description {
                 resp_line.push(Span::raw("  "));
                 resp_line.push(Span::styled(d.clone(), Style::default().fg(Color::Gray)));
             }

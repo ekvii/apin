@@ -3,10 +3,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use openapiv3::{Components, OpenAPI, Parameter, ReferenceOr, Schema, SchemaKind, Type};
+use openapiv3::{
+    Components, OpenAPI, Parameter, ParameterSchemaOrContent, ReferenceOr, Schema, SchemaKind,
+    Type,
+};
 
 use crate::spec::{
-    BodyField, Operation, Param, PathEntry, RequestBody, SchemaKindHint, SchemaNode, Spec,
+    BodyField, Operation, Param, PathEntry, PathKind, RequestBody, Response, SchemaKindHint,
+    SchemaNode, Spec,
 };
 
 /// Parse an OpenAPI 3.0.x document from a YAML/JSON string and convert it
@@ -34,25 +38,59 @@ pub fn parse(file_path: String, content: String) -> Result<Spec> {
                 ReferenceOr::Item(item) => item
                     .iter()
                     .map(|(method, op)| {
-                        let params = op.parameters.iter().filter_map(resolve_param).collect();
+                        let params = op
+                            .parameters
+                            .iter()
+                            .filter_map(|p| resolve_param(p, components))
+                            .collect();
 
-                        let responses = op
+                        let responses: Vec<Response> = op
                             .responses
                             .responses
                             .iter()
                             .map(|(sc, ref_or_resp)| {
-                                let desc = match ref_or_resp {
+                                let (desc, schema_tree) = match ref_or_resp {
                                     ReferenceOr::Item(r) => {
                                         let d = r.description.trim().to_string();
-                                        if d.is_empty() {
-                                            None
-                                        } else {
-                                            Some(d)
+                                        let d = if d.is_empty() { None } else { Some(d) };
+                                        let st = r
+                                            .content
+                                            .get("application/json")
+                                            .or_else(|| r.content.values().next())
+                                            .and_then(|mt| mt.schema.as_ref())
+                                            .and_then(|sr| build_schema_tree(sr, schemas_value));
+                                        (d, st)
+                                    }
+                                    // Bug L: resolve $ref responses via components.responses
+                                    ReferenceOr::Reference { reference } => {
+                                        let resolved = reference
+                                            .strip_prefix("#/components/responses/")
+                                            .and_then(|name| components?.responses.get(name))
+                                            .and_then(|ror| match ror {
+                                                ReferenceOr::Item(r) => Some(r),
+                                                ReferenceOr::Reference { .. } => None,
+                                            });
+                                        match resolved {
+                                            Some(r) => {
+                                                let d = r.description.trim().to_string();
+                                                let d = if d.is_empty() { None } else { Some(d) };
+                                                let st = r
+                                                    .content
+                                                    .get("application/json")
+                                                    .or_else(|| r.content.values().next())
+                                                    .and_then(|mt| mt.schema.as_ref())
+                                                    .and_then(|sr| build_schema_tree(sr, schemas_value));
+                                                (d, st)
+                                            }
+                                            None => (None, None),
                                         }
                                     }
-                                    ReferenceOr::Reference { .. } => None,
                                 };
-                                (sc.to_string(), desc)
+                                Response {
+                                    code: sc.to_string(),
+                                    description: desc,
+                                    schema_tree,
+                                }
                             })
                             .collect();
 
@@ -66,6 +104,8 @@ pub fn parse(file_path: String, content: String) -> Result<Spec> {
                             summary: op.summary.clone(),
                             description: op.description.clone(),
                             operation_id: op.operation_id.clone(),
+                            tags: op.tags.clone(),
+                            deprecated: op.deprecated,
                             params,
                             request_body,
                             responses,
@@ -77,6 +117,7 @@ pub fn parse(file_path: String, content: String) -> Result<Spec> {
 
             PathEntry {
                 path: path_str.clone(),
+                kind: PathKind::Path,
                 operations,
             }
         })
@@ -105,6 +146,7 @@ fn resolve_request_body(
             // e.g. "#/components/requestBodies/Foo" — rare, skip for now
             return RequestBody {
                 description: Some(format!("$ref: {}", reference)),
+                required: false,
                 fields: vec![],
                 schema_tree: None,
             };
@@ -126,6 +168,7 @@ fn resolve_request_body(
 
     RequestBody {
         description: body.description.clone(),
+        required: body.required,
         fields,
         schema_tree,
     }
@@ -525,12 +568,17 @@ fn resolve_schema<'a>(
 
 // ─── Parameter resolution ────────────────────────────────────────────────────
 
-/// Resolve a `ReferenceOr<Parameter>` to a `Param`, ignoring `$ref` entries
-/// (we don't resolve component references at this stage).
-fn resolve_param(p: &ReferenceOr<Parameter>) -> Option<Param> {
+/// Resolve a `ReferenceOr<Parameter>` to a `Param`.
+/// For `$ref` entries, looks up `components/parameters`.
+fn resolve_param(p: &ReferenceOr<Parameter>, components: Option<&Components>) -> Option<Param> {
     let param = match p {
         ReferenceOr::Item(param) => param,
-        ReferenceOr::Reference { .. } => return None,
+        // Bug K: resolve $ref parameters via components.parameters
+        ReferenceOr::Reference { reference } => {
+            let name = reference.strip_prefix("#/components/parameters/")?;
+            let ror = components?.parameters.get(name)?;
+            return resolve_param(ror, components);
+        }
     };
 
     let (data, location) = match param {
@@ -540,11 +588,29 @@ fn resolve_param(p: &ReferenceOr<Parameter>) -> Option<Param> {
         Parameter::Cookie { parameter_data, .. } => (parameter_data, "cookie"),
     };
 
+    // Bug E: extract actual schema type instead of hardcoding "string"
+    let schema_type = match &data.format {
+        ParameterSchemaOrContent::Schema(schema_ref) => {
+            resolve_schema(schema_ref, components).and_then(|s| match &s.schema_kind {
+                SchemaKind::Type(Type::String(_)) => Some("string".to_string()),
+                SchemaKind::Type(Type::Integer(_)) => Some("integer".to_string()),
+                SchemaKind::Type(Type::Number(_)) => Some("number".to_string()),
+                SchemaKind::Type(Type::Boolean { .. }) => Some("boolean".to_string()),
+                SchemaKind::Type(Type::Array(_)) => Some("array".to_string()),
+                SchemaKind::Type(Type::Object(_)) => Some("object".to_string()),
+                _ => None,
+            })
+        }
+        ParameterSchemaOrContent::Content(_) => None,
+    };
+
     Some(Param {
         name: data.name.clone(),
         location: location.to_string(),
         required: data.required,
         description: data.description.clone(),
+        schema_type,
+        deprecated: data.deprecated.unwrap_or(false),
     })
 }
 
@@ -635,6 +701,338 @@ mod tests {
         assert!(
             tree.children.iter().any(|c| c.label == "projectId"),
             "expected 'projectId' child in schema_tree"
+        );
+    }
+
+    // ── Deprecated operations ────────────────────────────────────────────────
+
+    #[test]
+    fn delete_vpc_is_deprecated() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs/{vpcId}")
+            .expect("/v1/vpcs/{vpcId} not found")
+            .operations
+            .iter()
+            .find(|o| o.method == "DELETE")
+            .expect("DELETE not found");
+        assert!(op.deprecated, "DELETE /v1/vpcs/{{vpcId}} should be deprecated");
+    }
+
+    #[test]
+    fn resize_instance_is_deprecated() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/instances/{instanceId}/resize")
+            .expect("/v1/instances/{instanceId}/resize not found")
+            .operations
+            .iter()
+            .find(|o| o.method == "POST")
+            .expect("POST not found");
+        assert!(op.deprecated, "POST /v1/instances/{{instanceId}}/resize should be deprecated");
+    }
+
+    #[test]
+    fn non_deprecated_operation_is_not_deprecated() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        assert!(!op.deprecated, "GET /v1/vpcs should NOT be deprecated");
+    }
+
+    // ── Tags ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn list_vpcs_has_vpcs_tag() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        assert!(
+            op.tags.iter().any(|t| t == "vpcs"),
+            "GET /v1/vpcs should have tag 'vpcs', got: {:?}",
+            op.tags
+        );
+    }
+
+    #[test]
+    fn list_instances_has_instances_tag() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/instances")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        assert!(
+            op.tags.iter().any(|t| t == "instances"),
+            "GET /v1/instances should have tag 'instances', got: {:?}",
+            op.tags
+        );
+    }
+
+    // ── Header and cookie params ─────────────────────────────────────────────
+
+    #[test]
+    fn list_instances_has_header_param() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/instances")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        let header_param = op
+            .params
+            .iter()
+            .find(|p| p.name == "X-Trace-Id" && p.location == "header")
+            .expect("expected X-Trace-Id header param");
+        assert_eq!(header_param.location, "header");
+        assert!(!header_param.required);
+    }
+
+    #[test]
+    fn list_instances_has_deprecated_cookie_param() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/instances")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        let cookie_param = op
+            .params
+            .iter()
+            .find(|p| p.name == "session" && p.location == "cookie")
+            .expect("expected 'session' cookie param");
+        assert_eq!(cookie_param.location, "cookie");
+        assert!(
+            cookie_param.deprecated,
+            "'session' cookie param should be deprecated"
+        );
+    }
+
+    // ── $ref param from components ───────────────────────────────────────────
+
+    #[test]
+    fn list_vpcs_has_request_id_header_from_ref() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        let param = op
+            .params
+            .iter()
+            .find(|p| p.name == "X-Request-Id")
+            .expect("expected resolved $ref param 'X-Request-Id'");
+        assert_eq!(param.location, "header");
+        assert!(!param.required);
+    }
+
+    // ── Integer and boolean param schema_type ───────────────────────────────
+
+    #[test]
+    fn list_vpcs_params_have_correct_schema_types() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+
+        let project_id = op.params.iter().find(|p| p.name == "projectId").unwrap();
+        assert_eq!(
+            project_id.schema_type.as_deref(),
+            Some("string"),
+            "projectId should be type string"
+        );
+
+        let limit = op.params.iter().find(|p| p.name == "limit").unwrap();
+        assert_eq!(
+            limit.schema_type.as_deref(),
+            Some("integer"),
+            "limit should be type integer"
+        );
+
+        let include_deleted = op.params.iter().find(|p| p.name == "includeDeleted").unwrap();
+        assert_eq!(
+            include_deleted.schema_type.as_deref(),
+            Some("boolean"),
+            "includeDeleted should be type boolean"
+        );
+    }
+
+    // ── Optional request body ────────────────────────────────────────────────
+
+    #[test]
+    fn patch_subnet_request_body_is_optional() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/subnets/{subnetId}")
+            .expect("/v1/subnets/{subnetId} not found")
+            .operations
+            .iter()
+            .find(|o| o.method == "PATCH")
+            .expect("PATCH not found");
+        let rb = op.request_body.as_ref().expect("request_body should be Some");
+        assert!(!rb.required, "PATCH /v1/subnets/{{subnetId}} body should NOT be required");
+    }
+
+    #[test]
+    fn create_vpc_request_body_is_required() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "POST")
+            .unwrap();
+        let rb = op.request_body.as_ref().expect("request_body should be Some");
+        assert!(rb.required, "POST /v1/vpcs body should be required");
+    }
+
+    // ── Response schema_tree ─────────────────────────────────────────────────
+
+    #[test]
+    fn list_vpcs_200_response_has_schema_tree() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        let resp = op
+            .responses
+            .iter()
+            .find(|r| r.code == "200")
+            .expect("expected 200 response");
+        let tree = resp.schema_tree.as_ref().expect("200 response should have schema_tree");
+        // VpcList has properties: items, total, nextOffset
+        assert!(
+            !tree.children.is_empty(),
+            "VpcList schema_tree should have children"
+        );
+        assert!(
+            tree.children.iter().any(|c| c.label == "items"),
+            "expected 'items' child in VpcList schema_tree"
+        );
+        assert!(
+            tree.children.iter().any(|c| c.label == "total"),
+            "expected 'total' child in VpcList schema_tree"
+        );
+    }
+
+    #[test]
+    fn response_without_schema_has_no_tree() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/vpcs/{vpcId}")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "DELETE")
+            .unwrap();
+        // 204 No Content — no response body
+        let resp = op
+            .responses
+            .iter()
+            .find(|r| r.code == "204")
+            .expect("expected 204 response");
+        assert!(
+            resp.schema_tree.is_none(),
+            "204 No Content should have no schema_tree"
+        );
+    }
+
+    // ── allOf schema tree ────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_response_schema_tree_is_allof() {
+        let content = std::fs::read_to_string(FIXTURE).expect("fixture not found");
+        let spec = parse("fixture.yaml".to_string(), content).unwrap();
+        let op = spec
+            .paths
+            .iter()
+            .find(|p| p.path == "/v1/stats")
+            .unwrap()
+            .operations
+            .iter()
+            .find(|o| o.method == "GET")
+            .unwrap();
+        let resp = op
+            .responses
+            .iter()
+            .find(|r| r.code == "200")
+            .expect("expected 200 response on /v1/stats");
+        let tree = resp.schema_tree.as_ref().expect("StatsResponse should have schema_tree");
+        assert_eq!(
+            tree.kind,
+            crate::spec::SchemaKindHint::AllOf,
+            "StatsResponse root kind should be AllOf"
+        );
+        assert!(
+            !tree.children.is_empty(),
+            "StatsResponse allOf tree should have branches"
         );
     }
 }

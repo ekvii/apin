@@ -9,7 +9,7 @@ Browse any number of specs with a Miller-columns path tree, inspect endpoints in
 full-screen detail view, and filter with incremental search — all without leaving
 the terminal.
 
-Supports OpenAPI **3.0** and **3.1**, YAML or JSON.
+Supports OpenAPI **3.0**, **3.1**, and **3.2**, YAML or JSON.
 
 ![apin demo](assets/apin.gif)
 
@@ -67,7 +67,10 @@ apin --download-dir . --force-download https://api.example.com
 
 - **Miller-columns tree** — navigate URL path segments column by column (`h` / `l`)
 - **Endpoint detail** — method, summary, parameters, request body, response codes
-- **Schema tree** — collapsible, interactive view of request body schemas
+- **Schema trees** — collapsible, interactive view of request body and response schemas; press `[N]` to open the Nth response tree
+- **Deprecated markers** — deprecated operations and parameters are flagged with `[deprecated]` throughout
+- **Webhooks** — 3.1/3.2 webhook entries appear alongside regular paths, labelled `[WEBHOOKS]`
+- **Custom HTTP methods** — 3.2 `additionalOperations` (COPY, MOVE, QUERY, …) are parsed and displayed
 - **Incremental search** — `/` to filter in any panel; `n` / `N` to cycle matches
 - **Vim-style navigation** — `j`/`k`, `gg`/`G`, `Ctrl-D`/`Ctrl-U`
 - **Multi-spec** — load a whole directory; switch between specs in a sidebar

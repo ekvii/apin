@@ -1,0 +1,252 @@
+swagger: "2.0"
+info:
+  title: Fixture Pet API
+  version: "1.0.0"
+  description: Artificial Swagger 2.0 spec used by parser unit tests.
+
+host: api.example.com
+basePath: /v1
+schemes:
+  - https
+
+# ── Top-level shared parameters ────────────────────────────────────────────────
+parameters:
+  StoreId:
+    name: storeId
+    in: path
+    required: true
+    type: string
+    description: The unique identifier of the store.
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+paths:
+
+  /pets:
+    get:
+      operationId: listPets
+      summary: List all pets
+      description: Returns a paginated list of pets.
+      tags:
+        - pets
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          type: integer
+          description: Maximum number of pets to return.
+        - name: status
+          in: query
+          required: false
+          type: string
+          description: Filter pets by status.
+      responses:
+        "200":
+          description: A list of pets.
+          schema:
+            type: array
+            items:
+              $ref: "#/definitions/Pet"
+        default:
+          description: Unexpected error.
+          schema:
+            $ref: "#/definitions/Error"
+
+    post:
+      operationId: createPet
+      summary: Create a pet
+      description: Creates a new pet in the store.
+      tags:
+        - pets
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: The pet to create.
+          schema:
+            $ref: "#/definitions/NewPet"
+      responses:
+        "201":
+          description: Pet created.
+          schema:
+            $ref: "#/definitions/Pet"
+        default:
+          description: Unexpected error.
+          schema:
+            $ref: "#/definitions/Error"
+
+  /pets/{petId}:
+    get:
+      operationId: getPetById
+      summary: Get a pet by ID
+      tags:
+        - pets
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          type: string
+          description: The unique identifier of the pet.
+      responses:
+        "200":
+          description: A single pet.
+          schema:
+            $ref: "#/definitions/Pet"
+        "404":
+          description: Pet not found.
+
+    put:
+      operationId: updatePet
+      summary: Update a pet (deprecated)
+      tags:
+        - pets
+      deprecated: true
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          type: string
+          description: The unique identifier of the pet.
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/NewPet"
+      responses:
+        "200":
+          description: Pet updated.
+          schema:
+            $ref: "#/definitions/Pet"
+
+    delete:
+      operationId: deletePet
+      summary: Delete a pet
+      tags:
+        - pets
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          type: string
+          description: The unique identifier of the pet.
+      responses:
+        "204":
+          description: Pet deleted successfully.
+        "404":
+          description: Pet not found.
+
+  /pets/{petId}/photo:
+    post:
+      operationId: uploadPetPhoto
+      summary: Upload a pet photo
+      tags:
+        - pets
+      consumes:
+        - multipart/form-data
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          type: string
+          description: The unique identifier of the pet.
+        - name: file
+          in: formData
+          required: true
+          type: file
+          description: The photo file to upload.
+        - name: caption
+          in: formData
+          required: false
+          type: string
+          description: Optional caption for the photo.
+      responses:
+        "200":
+          description: Photo uploaded successfully.
+
+  /stores/{storeId}/items:
+    parameters:
+      - $ref: "#/parameters/StoreId"
+
+    get:
+      operationId: listStoreItems
+      summary: List items in a store
+      tags:
+        - stores
+      responses:
+        "200":
+          description: A list of items.
+          schema:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+
+    post:
+      operationId: createStoreItem
+      summary: Add an item to a store
+      tags:
+        - stores
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+              price:
+                type: number
+      responses:
+        "201":
+          description: Item created.
+
+# ── Definitions ────────────────────────────────────────────────────────────────
+definitions:
+
+  Pet:
+    type: object
+    required:
+      - id
+      - name
+    properties:
+      id:
+        type: integer
+        description: Unique identifier for the pet.
+      name:
+        type: string
+        description: Name of the pet.
+      tag:
+        type: string
+        description: Optional tag for the pet.
+      status:
+        type: string
+        description: Current status of the pet.
+
+  NewPet:
+    type: object
+    required:
+      - name
+    properties:
+      name:
+        type: string
+        description: Name of the pet.
+      tag:
+        type: string
+        description: Optional tag for the pet.
+
+  Error:
+    type: object
+    required:
+      - code
+      - message
+    properties:
+      code:
+        type: integer
+        description: Machine-readable error code.
+      message:
+        type: string
+        description: Human-readable error message.

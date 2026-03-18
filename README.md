@@ -9,7 +9,7 @@ Browse any number of specs with a Miller-columns path tree, inspect endpoints in
 full-screen detail view, and filter with incremental search — all without leaving
 the terminal.
 
-Supports OpenAPI **3.0**, **3.1**, and **3.2**, YAML or JSON.
+Supports **Swagger 2.0**, OpenAPI **3.0**, **3.1**, and **3.2**, YAML or JSON.
 
 ![apin demo](assets/apin.gif)
 

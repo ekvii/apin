@@ -163,7 +163,9 @@ pub fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<
             tokio::task::spawn_blocking(move || {
                 let version = sniff_version(&content)
                     .with_context(|| format!("'{}' does not look like an OpenAPI document", fp))?;
-                if version.starts_with("3.0") {
+                if version.starts_with("2.") {
+                    parser::v20::parse(fp, content)
+                } else if version.starts_with("3.0") {
                     parser::v30::parse(fp, content)
                 } else if version.starts_with("3.1") {
                     parser::v31::parse(fp, content)
@@ -172,7 +174,7 @@ pub fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<
                 } else {
                     bail!(
                         "'{}' uses unsupported OpenAPI version '{}' \
-                         (only 3.0.x, 3.1.x, and 3.2.x are supported)",
+                         (only 2.0, 3.0.x, 3.1.x, and 3.2.x are supported)",
                         fp,
                         version
                     )
@@ -184,8 +186,8 @@ pub fn load_spec(file_path: String) -> impl std::future::Future<Output = Result<
         })
 }
 
-/// Extract the value of the top-level `openapi:` key without fully
-/// deserialising the document.  Works for both YAML and JSON.
+/// Extract the value of the top-level `openapi:` (3.x) or `swagger:` (2.0)
+/// key without fully deserialising the document.  Works for both YAML and JSON.
 fn sniff_version(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -196,18 +198,25 @@ fn sniff_version(content: &str) -> Option<String> {
                 return Some(v);
             }
         }
-        // JSON: `"openapi": "3.1.0"`
-        if trimmed.contains("\"openapi\"")
+        // YAML: `swagger: "2.0"` or `swagger: 2.0`
+        if let Some(rest) = trimmed.strip_prefix("swagger:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+        // JSON: `"openapi": "3.1.0"` or `"swagger": "2.0"`
+        if (trimmed.contains("\"openapi\"") || trimmed.contains("\"swagger\""))
             && let Some(colon) = trimmed.find(':')
         {
-                let v = trimmed[colon + 1..]
-                    .trim()
-                    .trim_matches('"')
-                    .trim_end_matches(',')
-                    .to_string();
-                if !v.is_empty() {
-                    return Some(v);
-                }
+            let v = trimmed[colon + 1..]
+                .trim()
+                .trim_matches('"')
+                .trim_end_matches(',')
+                .to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
         }
     }
     None

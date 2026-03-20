@@ -49,8 +49,6 @@ jobs:
 
       - name: Bump version & push tag
         if: github.event_name == 'push' && github.ref_type == 'branch'
-        env:
-          VERSION_BUMP_TOKEN: ${{ secrets.TAG_PUSH_TOKEN }}
         run: |
           git fetch --tags
 

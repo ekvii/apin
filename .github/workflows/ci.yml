@@ -47,7 +47,7 @@ jobs:
       - name: Bump version & push tag
         if: github.event_name == 'push' && github.ref_type == 'branch'
         env:
-          VERSION_BUMP_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
+          VERSION_BUMP_TOKEN: ${{ secrets.TAG_PUSH_TOKEN }}
         run: |
           git fetch --tags
 
@@ -93,10 +93,9 @@ jobs:
           # Only commit if there are staged changes (version was auto-bumped)
           git diff --cached --quiet || git commit -m "chore: bump version to ${TAG}"
 
-          # Push using GITHUB_TOKEN to not trigger workflow run again
           git push origin "HEAD:${{ github.ref_name }}"
 
           git tag "$TAG"
 
-          # Push using a PAT to trigger release workflow
+          # Push tag via classic PAT so GitHub treats it as a user push and triggers release.yml
           git push "https://x-access-token:${VERSION_BUMP_TOKEN}@github.com/${{ github.repository }}" "$TAG"

@@ -90,12 +90,12 @@ jobs:
             exit 0
           fi
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "ekvii"
+          git config user.email "895719+ekvii@users.noreply.github.com"
 
           git add Cargo.toml Cargo.lock
           # Only commit if there are staged changes (version was auto-bumped)
-          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG}"
+          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG} [skip ci]"
 
           git tag "$TAG"
 

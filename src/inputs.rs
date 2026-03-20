@@ -22,8 +22,7 @@ pub fn resolve_inputs(
             // input is a URL — resolve it asynchronously
             Box::pin(stream::once(async move {
                 resolve_url(input, download_dir, force_download).await
-            }))
-                as std::pin::Pin<Box<dyn Stream<Item = Result<String>> + Send>>
+            })) as std::pin::Pin<Box<dyn Stream<Item = Result<String>> + Send>>
         } else {
             let (is_file, is_dir) = {
                 let p = Path::new(&input);
@@ -41,7 +40,8 @@ pub fn resolve_inputs(
                 Box::pin(stream::once(future::ready(Err(anyhow!(
                     "'{}' not found — make sure the path is correct",
                     input
-                ))))) as std::pin::Pin<Box<dyn Stream<Item = Result<String>> + Send>>
+                )))))
+                    as std::pin::Pin<Box<dyn Stream<Item = Result<String>> + Send>>
             }
         }
     });
@@ -128,9 +128,7 @@ fn url_cache_name(url: &str) -> String {
 fn looks_like_direct_spec_url(url: &str) -> bool {
     let path = url.split('?').next().unwrap_or(url);
     let lower = path.to_lowercase();
-    lower.ends_with(".yaml")
-        || lower.ends_with(".yml")
-        || lower.ends_with(".json")
+    lower.ends_with(".yaml") || lower.ends_with(".yml") || lower.ends_with(".json")
 }
 
 /// Try fetching `url`; return the body text if the response is 2xx and the
@@ -207,9 +205,9 @@ fn is_openapi_content(text: &str) -> bool {
 /// Write `body` to `path`, creating parent directories as needed.
 async fn write_spec(body: String, path: &PathBuf) -> Result<String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|e| anyhow!(e).context(format!("failed to create directory '{}'", parent.display())))?;
+        fs::create_dir_all(parent).await.map_err(|e| {
+            anyhow!(e).context(format!("failed to create directory '{}'", parent.display()))
+        })?;
     }
 
     fs::write(path, body.as_bytes())
@@ -249,11 +247,98 @@ async fn has_openapi_field(path: PathBuf) -> Result<Option<String>> {
     let path_str = path.to_str().map(str::to_string);
     let mut reader = fs::File::open(&path)
         .await
-        .map_err(|e| anyhow!(e).context(format!("cannot open '{}'", path_str.as_deref().unwrap_or_default())))?
+        .map_err(|e| {
+            anyhow!(e).context(format!(
+                "cannot open '{}'",
+                path_str.as_deref().unwrap_or_default()
+            ))
+        })?
         .take(4096);
     let mut buf = Vec::with_capacity(4096);
     reader.read_to_end(&mut buf).await.map_err(|e| anyhow!(e))?;
     let head = std::str::from_utf8(&buf).unwrap_or("");
-    let found = head.lines().any(|l| l.trim_start().starts_with("openapi:"));
+    let found = head.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with("openapi:") || l.starts_with("swagger:")
+    });
     Ok(found.then_some(path_str).flatten())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_collect_openapi_files() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("apin_test_dir");
+        let _ = fs::remove_dir_all(&dir).await; // Clean up from previous test runs
+        fs::create_dir(&dir).await.unwrap();
+
+        let valid_spec = dir.join("valid.yaml");
+        let invalid_spec = dir.join("invalid.yaml");
+        let non_yaml = dir.join("not_a_spec.txt");
+
+        fs::write(&valid_spec, "openapi: 3.0.0").await.unwrap();
+        fs::write(&invalid_spec, "not an openapi file")
+            .await
+            .unwrap();
+        fs::write(&non_yaml, "openapi: 3.0.0").await.unwrap();
+
+        let mut paths = collect_openapi_files(dir.to_string_lossy().to_string())
+            .try_collect::<Vec<String>>()
+            .await
+            .unwrap();
+
+        paths.sort();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], valid_spec.to_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_collect_all_fixtures() {
+        let mut actual_result = collect_openapi_files("tests/fixtures".to_string())
+            .try_collect::<Vec<String>>()
+            .await
+            .unwrap();
+        actual_result.sort();
+
+        assert_eq!(
+            actual_result,
+            vec![
+                "tests/fixtures/openapi30_fixture.yaml",
+                "tests/fixtures/openapi31_fixture.yaml",
+                "tests/fixtures/openapi32_fixture.yaml",
+                "tests/fixtures/swagger20_fixture.yaml",
+            ]
+        )
+    }
+
+    #[test]
+    fn test_is_yaml() {
+        assert!(is_yaml(&PathBuf::from("spec.yaml")));
+        assert!(is_yaml(&PathBuf::from("spec.yml")));
+        assert!(is_yaml(&PathBuf::from("SPEC.YAML")));
+        assert!(!is_yaml(&PathBuf::from("spec.json")));
+        assert!(!is_yaml(&PathBuf::from("spec.txt")));
+    }
+
+    #[tokio::test]
+    async fn test_has_openapi_field() {
+        let tmp = std::env::temp_dir();
+        let file_with_field = tmp.join("with_openapi.yaml");
+        let file_without_field = tmp.join("without_openapi.yaml");
+
+        fs::write(&file_with_field, "openapi: 3.0.0").await.unwrap();
+        fs::write(&file_without_field, "not an openapi file")
+            .await
+            .unwrap();
+
+        let expected_result = file_with_field.to_str().map(str::to_string);
+        assert_eq!(
+            has_openapi_field(file_with_field).await.unwrap(),
+            expected_result
+        );
+        assert_eq!(has_openapi_field(file_without_field).await.unwrap(), None);
+    }
 }

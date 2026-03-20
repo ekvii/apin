@@ -14,6 +14,8 @@ jobs:
   check:
     name: Check, Clippy & Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to push version-bump commit and tag
 
     steps:
       - uses: actions/checkout@v4
@@ -41,3 +43,54 @@ jobs:
 
       - name: cargo test
         run: cargo test
+
+      - name: Bump version & push tag
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          git fetch --tags
+
+          # Latest published semver tag (empty string if none exist yet)
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST="${LATEST_TAG#v}"
+
+          # Current version in Cargo.toml
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+
+          if [ -z "$LATEST" ]; then
+            # No tags yet — use Cargo.toml version as the first tag
+            NEXT="$CARGO_VERSION"
+          else
+            # Determine whether the developer already bumped the version
+            HIGHER=$(printf '%s\n%s' "$LATEST" "$CARGO_VERSION" | sort -V | tail -1)
+            if [ "$HIGHER" = "$CARGO_VERSION" ] && [ "$CARGO_VERSION" != "$LATEST" ]; then
+              # Cargo.toml is already ahead of the latest tag — use it as-is
+              NEXT="$CARGO_VERSION"
+            else
+              # Auto-bump patch
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
+              NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+              # Update version in Cargo.toml
+              sed -i "s/^version = \"${CARGO_VERSION}\"/version = \"${NEXT}\"/" Cargo.toml
+              # Refresh Cargo.lock to reflect the new version
+              cargo update --workspace
+            fi
+          fi
+
+          TAG="v${NEXT}"
+
+          # Bail out early if this tag already exists (e.g. re-run of the same commit)
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping bump."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock
+          # Only commit if there are staged changes (version was auto-bumped)
+          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG} [skip ci]"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+          git tag "$TAG"
+          git push origin "$TAG"

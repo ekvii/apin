@@ -1,17 +1,17 @@
 use std::io::Stdout;
 
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{ListState, Paragraph},
-    Frame, Terminal,
 };
 
 use crate::spec::{PathKind, Spec};
 
 use super::components::detail::{DetailView, Search};
-use super::components::path_tree::{build_tree, PathNode};
+use super::components::path_tree::{PathNode, build_tree};
 
 // ─── Loading state ────────────────────────────────────────────────────────────
 
@@ -1009,7 +1009,7 @@ fn draw_frame(
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(50),
+            Constraint::Percentage(30),
             Constraint::Min(0),
             Constraint::Length(1),
         ])

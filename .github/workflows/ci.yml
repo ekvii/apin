@@ -99,5 +99,5 @@ jobs:
 
           git tag "$TAG"
 
-          # Push tag via classic PAT so GitHub treats it as a user push and triggers release.yml
-          git push origin "$TAG"
+          # Push new commit and tag via classic PAT so GitHub treats it as a user push and triggers release.yml
+          git push origin "HEAD:${{ github.ref_name }}" "$TAG"

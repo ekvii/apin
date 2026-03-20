@@ -26,7 +26,10 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Cache cargo registry & build
         uses: actions/cache@v5
@@ -44,8 +47,14 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo test
-        run: cargo test
+      - name: cargo test & coverage
+        run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Bump version & push tag
         if: github.event_name == 'push' && github.ref_type == 'branch'

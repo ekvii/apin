@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/ekvii/apin/actions/workflows/ci.yml/badge.svg)](https://github.com/ekvii/apin/actions/workflows/ci.yml)
 [![Release](https://github.com/ekvii/apin/actions/workflows/release.yml/badge.svg)](https://github.com/ekvii/apin/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/ekvii/apin/graph/badge.svg)](https://codecov.io/gh/ekvii/apin)
 
 A terminal UI for navigating OpenAPI specs — fast, keyboard-driven, zero configuration.
 

@@ -18,7 +18,9 @@ jobs:
       contents: write   # required to push version-bump commit and tag
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.CI_TOKEN }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -26,7 +28,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo registry & build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -91,11 +93,11 @@ jobs:
 
           git add Cargo.toml Cargo.lock
           # Only commit if there are staged changes (version was auto-bumped)
-          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG}"
+          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG} [skip ci]"
 
           git push origin "HEAD:${{ github.ref_name }}"
 
           git tag "$TAG"
 
           # Push tag via classic PAT so GitHub treats it as a user push and triggers release.yml
-          git push "https://x-access-token:${VERSION_BUMP_TOKEN}@github.com/${{ github.repository }}" "$TAG"
+          git push origin "$TAG"

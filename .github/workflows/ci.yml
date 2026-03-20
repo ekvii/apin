@@ -95,9 +95,7 @@ jobs:
 
           git add Cargo.toml Cargo.lock
           # Only commit if there are staged changes (version was auto-bumped)
-          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG} [skip ci]"
-
-          git push origin "HEAD:${{ github.ref_name }}"
+          git diff --cached --quiet || git commit -m "chore: bump version to ${TAG}"
 
           git tag "$TAG"
 

@@ -184,4 +184,64 @@ mod tests {
             leaves
         );
     }
+
+    #[test]
+    fn empty_paths_produces_empty_root() {
+        let root = build_tree(&[]);
+        assert!(root.children.is_empty());
+        assert!(root.path_index.is_none());
+    }
+
+    #[test]
+    fn single_path_single_segment() {
+        let paths = vec!["/health".to_string()];
+        let root = build_tree(&paths);
+        assert_eq!(root.children.len(), 1);
+        let child = &root.children[0];
+        assert_eq!(child.label, "health");
+        assert_eq!(child.path_index, Some(0));
+        assert!(child.is_leaf());
+    }
+
+    #[test]
+    fn sort_children_dot_first_then_lexicographic() {
+        // Three sibling nodes: "zebra", ".", "alpha" — after sort: ".", "alpha", "zebra"
+        let paths = vec![
+            "/api".to_string(),       // index 0 — will become "." child
+            "/api/zebra".to_string(), // index 1
+            "/api/alpha".to_string(), // index 2
+        ];
+        let root = build_tree(&paths);
+        // Navigate into the "api" node.
+        let api = root.children.iter().find(|c| c.label == "api").unwrap();
+        let labels: Vec<&str> = api.children.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec![".", "alpha", "zebra"]);
+    }
+
+    #[test]
+    fn all_leaves_present_in_multi_path_tree() {
+        let paths: Vec<String> = vec!["/a/b".to_string(), "/a/c".to_string(), "/d".to_string()];
+        let root = build_tree(&paths);
+        let leaves = leaf_indices(&root);
+        for expected_idx in 0..3 {
+            assert!(
+                leaves.iter().any(|(_, i)| *i == expected_idx),
+                "index {} missing: {:?}",
+                expected_idx,
+                leaves
+            );
+        }
+        assert_eq!(leaves.len(), 3);
+    }
+
+    #[test]
+    fn path_index_count_equals_input_count() {
+        // Confirm no indices are duplicated or dropped.
+        let paths: Vec<String> = (0..5).map(|i| format!("/segment/{}", i)).collect();
+        let root = build_tree(&paths);
+        let leaves = leaf_indices(&root);
+        let mut indices: Vec<usize> = leaves.iter().map(|(_, i)| *i).collect();
+        indices.sort();
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+    }
 }

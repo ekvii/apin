@@ -195,11 +195,20 @@ fn base_url(url: &str) -> String {
     url[..authority_end].to_string()
 }
 
+/// Returns `true` if a single line declares an OpenAPI or Swagger document root key.
+fn is_openapi_line(line: &str) -> bool {
+    let l = line.trim_start();
+    // YAML:  openapi: / swagger:
+    // JSON:  "openapi": / "swagger":
+    l.starts_with("openapi:")
+        || l.starts_with("swagger:")
+        || l.starts_with("\"openapi\":")
+        || l.starts_with("\"swagger\":")
+}
+
 /// Returns `true` if the content looks like an OpenAPI document.
 fn is_openapi_content(text: &str) -> bool {
-    text.lines()
-        .take(30)
-        .any(|l| l.trim_start().starts_with("openapi:") || l.contains("\"openapi\""))
+    text.lines().take(30).any(is_openapi_line)
 }
 
 /// Write `body` to `path`, creating parent directories as needed.
@@ -227,22 +236,23 @@ fn collect_openapi_files(root: String) -> impl Stream<Item = Result<String>> + S
         .map_err(|e| anyhow!(e))
         .try_filter_map(|entry| async move {
             let path = entry.path();
-            if !is_yaml(&path) {
+            if !is_supported_format(&path) {
                 return Ok(None);
             }
             has_openapi_field(path).await
         })
 }
 
-fn is_yaml(p: &std::path::Path) -> bool {
+fn is_supported_format(p: &std::path::Path) -> bool {
     matches!(
         p.extension().and_then(|e| e.to_str()).map(str::to_lowercase),
-        Some(s) if s == "yaml" || s == "yml"
+        Some(s) if s == "yaml" || s == "yml" || s == "json"
     )
 }
 
-/// Returns the path as a `String` if the file's first 4 KB contains a line
-/// starting with `openapi:`, or `None` otherwise.
+/// Returns the path as a `String` if the file's first 4 KB contains an
+/// `openapi:` / `swagger:` key (YAML) or `"openapi":` / `"swagger":` key (JSON),
+/// or `None` otherwise.
 async fn has_openapi_field(path: PathBuf) -> Result<Option<String>> {
     let path_str = path.to_str().map(str::to_string);
     let mut reader = fs::File::open(&path)
@@ -257,11 +267,7 @@ async fn has_openapi_field(path: PathBuf) -> Result<Option<String>> {
     let mut buf = Vec::with_capacity(4096);
     reader.read_to_end(&mut buf).await.map_err(|e| anyhow!(e))?;
     let head = std::str::from_utf8(&buf).unwrap_or("");
-    let found = head.lines().any(|l| {
-        let l = l.trim_start();
-        l.starts_with("openapi:") || l.starts_with("swagger:")
-    });
-    Ok(found.then_some(path_str).flatten())
+    Ok(is_openapi_content(head).then_some(path_str).flatten())
 }
 
 #[cfg(test)]
@@ -315,12 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_yaml() {
-        assert!(is_yaml(&PathBuf::from("spec.yaml")));
-        assert!(is_yaml(&PathBuf::from("spec.yml")));
-        assert!(is_yaml(&PathBuf::from("SPEC.YAML")));
-        assert!(!is_yaml(&PathBuf::from("spec.json")));
-        assert!(!is_yaml(&PathBuf::from("spec.txt")));
+    fn test_is_supported_format() {
+        assert!(is_supported_format(&PathBuf::from("spec.yaml")));
+        assert!(is_supported_format(&PathBuf::from("spec.yml")));
+        assert!(is_supported_format(&PathBuf::from("SPEC.YAML")));
+        assert!(is_supported_format(&PathBuf::from("spec.json")));
+        assert!(!is_supported_format(&PathBuf::from("spec.txt")));
     }
 
     #[tokio::test]

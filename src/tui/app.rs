@@ -1,17 +1,17 @@
 use std::io::Stdout;
 
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{ListState, Paragraph},
+    Frame, Terminal,
 };
 
 use crate::spec::{PathKind, Spec};
 
 use super::components::detail::{DetailView, Search};
-use super::components::path_tree::{PathNode, build_tree};
+use super::components::path_tree::{build_tree, PathNode};
 
 // ─── Loading state ────────────────────────────────────────────────────────────
 
@@ -947,6 +947,311 @@ impl ApinApp {
             draw_frame(frame, specs, focus, specs_state, trees, ops, detail);
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::components::path_tree::build_tree;
+
+    // ── OpsState ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ops_state_sync_resets_on_path_change() {
+        let mut ops = OpsState::default();
+        // Seed some state at path 0.
+        ops.sync(Some(0), 5);
+        ops.list.select(Some(3));
+        ops.search.query.push('x');
+
+        // Switch to path 1 — everything should reset.
+        ops.sync(Some(1), 3);
+        assert_eq!(ops.selected(), 0, "selection should reset to 0");
+        assert!(ops.search.query.is_empty(), "search query should clear");
+    }
+
+    #[test]
+    fn ops_state_sync_no_reset_when_path_unchanged() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 5);
+        ops.list.select(Some(2));
+        // Calling sync again with the same path must not change selection.
+        ops.sync(Some(0), 5);
+        assert_eq!(ops.selected(), 2);
+    }
+
+    #[test]
+    fn ops_state_sync_selects_none_when_empty() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 0);
+        assert_eq!(ops.list.selected(), None);
+    }
+
+    #[test]
+    fn ops_state_clamp_deselects_when_empty() {
+        let mut ops = OpsState::default();
+        ops.list.select(Some(3));
+        ops.clamp(0);
+        assert_eq!(ops.list.selected(), None);
+    }
+
+    #[test]
+    fn ops_state_clamp_brings_selection_in_bounds() {
+        let mut ops = OpsState::default();
+        ops.list.select(Some(10));
+        ops.clamp(3);
+        assert_eq!(ops.list.selected(), Some(2));
+    }
+
+    #[test]
+    fn ops_state_clamp_noop_when_in_bounds() {
+        let mut ops = OpsState::default();
+        ops.list.select(Some(1));
+        ops.clamp(5);
+        assert_eq!(ops.list.selected(), Some(1));
+    }
+
+    #[test]
+    fn ops_state_move_down_clamps_at_end() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 3);
+        ops.move_down(3);
+        ops.move_down(3);
+        ops.move_down(3); // should stay at 2
+        assert_eq!(ops.selected(), 2);
+    }
+
+    #[test]
+    fn ops_state_move_up_clamps_at_start() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 3);
+        ops.move_up();
+        assert_eq!(ops.selected(), 0);
+    }
+
+    #[test]
+    fn ops_state_move_top_and_bottom() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 5);
+        ops.move_bottom(5);
+        assert_eq!(ops.selected(), 4);
+        ops.move_top();
+        assert_eq!(ops.selected(), 0);
+    }
+
+    #[test]
+    fn ops_state_search_cancel_clears_and_resets() {
+        let mut ops = OpsState::default();
+        ops.sync(Some(0), 5);
+        ops.list.select(Some(4));
+        ops.search.query = "xyz".into();
+        ops.search.active = true;
+        ops.search_cancel();
+        assert!(!ops.search.active);
+        assert!(ops.search.query.is_empty());
+        // clamp(0) was called, so selection goes to None.
+        assert_eq!(ops.list.selected(), None);
+    }
+
+    // ── TreeCursor ────────────────────────────────────────────────────────────
+
+    fn make_cursor(paths: &[&str]) -> TreeCursor {
+        let strings: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+        let root = build_tree(&strings);
+        let mut cursor = TreeCursor::new(root);
+        cursor.open_next_level();
+        cursor
+    }
+
+    #[test]
+    fn tree_cursor_new_empty_tree() {
+        let root = build_tree(&[]);
+        let cursor = TreeCursor::new(root);
+        assert_eq!(cursor.levels.len(), 0);
+        assert_eq!(cursor.active_col, 0);
+        assert!(cursor.node_at_depth(0).is_none());
+    }
+
+    #[test]
+    fn tree_cursor_node_at_depth_single_segment() {
+        let cursor = make_cursor(&["/pets"]);
+        let node = cursor.node_at_depth(0).unwrap();
+        assert_eq!(node.label, "pets");
+    }
+
+    #[test]
+    fn tree_cursor_filtered_children_no_filter() {
+        let cursor = make_cursor(&["/a", "/b", "/c"]);
+        let fc = cursor.filtered_children();
+        // Root has children a, b, c (sorted).
+        assert_eq!(fc.len(), 3);
+        let labels: Vec<&str> = fc.iter().map(|(_, l, _)| *l).collect();
+        assert_eq!(labels, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn tree_cursor_filtered_children_with_filter() {
+        let mut cursor = make_cursor(&["/api", "/app", "/docs"]);
+        cursor.search.query = "ap".into();
+        let fc = cursor.filtered_children();
+        let labels: Vec<&str> = fc.iter().map(|(_, l, _)| *l).collect();
+        assert_eq!(labels, vec!["api", "app"]);
+    }
+
+    #[test]
+    fn tree_cursor_filtered_cursor_tracks_selection() {
+        let cursor = make_cursor(&["/a", "/b", "/c"]);
+        // Default selection is index 0 (unfiltered).
+        assert_eq!(cursor.filtered_cursor(), 0);
+    }
+
+    #[test]
+    fn tree_cursor_move_down_advances_selection() {
+        let mut cursor = make_cursor(&["/a", "/b", "/c"]);
+        cursor.move_down();
+        assert_eq!(cursor.levels[0].selected, 1);
+    }
+
+    #[test]
+    fn tree_cursor_move_down_clamps_at_end() {
+        let mut cursor = make_cursor(&["/a", "/b"]);
+        cursor.move_down();
+        cursor.move_down(); // already at last
+        assert_eq!(cursor.levels[0].selected, 1);
+    }
+
+    #[test]
+    fn tree_cursor_move_up_clamps_at_start() {
+        let mut cursor = make_cursor(&["/a", "/b"]);
+        cursor.move_up();
+        assert_eq!(cursor.levels[0].selected, 0);
+    }
+
+    #[test]
+    fn tree_cursor_move_top_and_bottom() {
+        let mut cursor = make_cursor(&["/a", "/b", "/c"]);
+        cursor.move_bottom();
+        assert_eq!(cursor.levels[0].selected, 2);
+        cursor.move_top();
+        assert_eq!(cursor.levels[0].selected, 0);
+    }
+
+    #[test]
+    fn tree_cursor_move_right_into_children() {
+        // /v1/a has children — moving right should enter column 1.
+        let mut cursor = make_cursor(&["/v1/a", "/v1/b"]);
+        // Start at "v1" (depth 0).
+        assert_eq!(cursor.active_col, 0);
+        let moved = cursor.move_right();
+        assert!(moved);
+        assert_eq!(cursor.active_col, 1);
+    }
+
+    #[test]
+    fn tree_cursor_move_right_on_leaf_returns_false() {
+        let mut cursor = make_cursor(&["/solo"]);
+        // "solo" is a leaf — cannot go right.
+        let moved = cursor.move_right();
+        assert!(!moved);
+        assert_eq!(cursor.active_col, 0);
+    }
+
+    #[test]
+    fn tree_cursor_move_left_returns_false_at_col_zero() {
+        let mut cursor = make_cursor(&["/a"]);
+        assert!(!cursor.move_left());
+        assert_eq!(cursor.active_col, 0);
+    }
+
+    #[test]
+    fn tree_cursor_move_left_after_right() {
+        let mut cursor = make_cursor(&["/v1/a", "/v1/b"]);
+        cursor.move_right();
+        assert_eq!(cursor.active_col, 1);
+        let moved = cursor.move_left();
+        assert!(moved);
+        assert_eq!(cursor.active_col, 0);
+    }
+
+    #[test]
+    fn tree_cursor_breadcrumb_empty_at_col_zero() {
+        let cursor = make_cursor(&["/v1/a"]);
+        assert_eq!(cursor.breadcrumb(0), "");
+    }
+
+    #[test]
+    fn tree_cursor_breadcrumb_at_col_one() {
+        let mut cursor = make_cursor(&["/v1/a", "/v1/b"]);
+        cursor.move_right();
+        // Column 1's breadcrumb is the label of the node at depth 0 = "v1".
+        assert_eq!(cursor.breadcrumb(1), "v1");
+    }
+
+    #[test]
+    fn tree_cursor_search_clamp_jumps_to_first_match() {
+        let mut cursor = make_cursor(&["/alpha", "/beta", "/gamma"]);
+        // Select "gamma" (index 2).
+        cursor.levels[0].selected = 2;
+        // Now apply a filter that doesn't include "gamma".
+        cursor.search.query = "a".into(); // matches "alpha" and "gamma" and "beta"? no: "alpha","gamma"
+                                          // Actually "gamma" contains 'a' so let's use "al" which only matches "alpha".
+        cursor.search.query = "al".into();
+        cursor.search_clamp_selection();
+        // Selection should have jumped to "alpha" (index 0).
+        assert_eq!(cursor.levels[0].selected, 0);
+    }
+
+    #[test]
+    fn single_leaf_helper_direct_leaf() {
+        // A node that is itself a leaf should return its path_index.
+        let node = PathNode {
+            label: "x".into(),
+            path_index: Some(7),
+            children: vec![],
+        };
+        assert_eq!(single_leaf(&node), Some(7));
+    }
+
+    #[test]
+    fn single_leaf_helper_single_child_chain() {
+        // A chain of single children ending at a leaf.
+        let leaf = PathNode {
+            label: "c".into(),
+            path_index: Some(3),
+            children: vec![],
+        };
+        let mid = PathNode {
+            label: "b".into(),
+            path_index: None,
+            children: vec![leaf],
+        };
+        let root = PathNode {
+            label: "a".into(),
+            path_index: None,
+            children: vec![mid],
+        };
+        assert_eq!(single_leaf(&root), Some(3));
+    }
+
+    #[test]
+    fn single_leaf_helper_multiple_children_returns_none() {
+        let a = PathNode {
+            label: "a".into(),
+            path_index: Some(0),
+            children: vec![],
+        };
+        let b = PathNode {
+            label: "b".into(),
+            path_index: Some(1),
+            children: vec![],
+        };
+        let root = PathNode {
+            label: "r".into(),
+            path_index: None,
+            children: vec![a, b],
+        };
+        assert_eq!(single_leaf(&root), None);
     }
 }
 

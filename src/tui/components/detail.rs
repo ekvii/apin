@@ -1300,3 +1300,178 @@ fn truncate(s: &str, max: usize) -> String {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Search::matches ───────────────────────────────────────────────────────
+
+    #[test]
+    fn search_matches_empty_query_always_true() {
+        let s = Search::default();
+        assert!(s.matches("anything"));
+        assert!(s.matches(""));
+    }
+
+    #[test]
+    fn search_matches_case_insensitive() {
+        let s = Search { query: "GET".into(), active: false };
+        assert!(s.matches("get"));
+        assert!(s.matches("GET"));
+        assert!(s.matches("getUser"));
+        assert!(!s.matches("post"));
+    }
+
+    #[test]
+    fn search_matches_substring() {
+        let s = Search { query: "user".into(), active: false };
+        assert!(s.matches("listUsers"));
+        assert!(s.matches("USER"));
+        assert!(!s.matches("account"));
+    }
+
+    #[test]
+    fn search_is_empty_reflects_query() {
+        let mut s = Search::default();
+        assert!(s.is_empty());
+        s.query.push('x');
+        assert!(!s.is_empty());
+    }
+
+    // ── DetailView scroll helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn detail_scroll_down_and_up() {
+        let mut d = DetailView::default();
+        d.scroll_down(5);
+        assert_eq!(d.scroll, 5);
+        d.scroll_up(3);
+        assert_eq!(d.scroll, 2);
+    }
+
+    #[test]
+    fn detail_scroll_up_does_not_underflow() {
+        let mut d = DetailView::default();
+        d.scroll_up(10); // scroll is 0, should stay 0
+        assert_eq!(d.scroll, 0);
+    }
+
+    #[test]
+    fn detail_scroll_top_resets_to_zero() {
+        let mut d = DetailView::default();
+        d.scroll = 42;
+        d.scroll_top();
+        assert_eq!(d.scroll, 0);
+    }
+
+    #[test]
+    fn detail_scroll_bottom_sets_large_value() {
+        let mut d = DetailView::default();
+        d.scroll_bottom();
+        // Just check it's a large value (won't overflow).
+        assert!(d.scroll > 0);
+    }
+
+    #[test]
+    fn detail_back_clears_in_tree_and_scroll() {
+        let mut d = DetailView::default();
+        d.in_tree = true;
+        d.scroll = 99;
+        d.focused_resp_tree = Some(0);
+        d.back();
+        assert_eq!(d.scroll, 0);
+        assert!(!d.in_tree);
+        assert!(d.focused_resp_tree.is_none());
+    }
+
+    // ── DetailView search helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn detail_search_cancel_clears_everything() {
+        let mut d = DetailView::default();
+        d.search.active = true;
+        d.search.query = "hello".into();
+        d.search_matches = vec![1, 2, 3];
+        d.search_cancel();
+        assert!(!d.search.active);
+        assert!(d.search.query.is_empty());
+        assert!(d.search_matches.is_empty());
+    }
+
+    #[test]
+    fn detail_search_next_cycles_through_matches() {
+        let mut d = DetailView::default();
+        d.search_matches = vec![0, 5, 10];
+        d.search_cursor = 0;
+        d.scroll = 0;
+
+        d.search_next();
+        assert_eq!(d.search_cursor, 1);
+        assert_eq!(d.scroll, 5);
+
+        d.search_next();
+        assert_eq!(d.search_cursor, 2);
+        assert_eq!(d.scroll, 10);
+
+        // Wraps around.
+        d.search_next();
+        assert_eq!(d.search_cursor, 0);
+        assert_eq!(d.scroll, 0);
+    }
+
+    #[test]
+    fn detail_search_prev_cycles_backwards() {
+        let mut d = DetailView::default();
+        d.search_matches = vec![0, 5, 10];
+        d.search_cursor = 0;
+        d.scroll = 0;
+
+        // Going prev from 0 wraps to last.
+        d.search_prev();
+        assert_eq!(d.search_cursor, 2);
+        assert_eq!(d.scroll, 10);
+
+        d.search_prev();
+        assert_eq!(d.search_cursor, 1);
+        assert_eq!(d.scroll, 5);
+    }
+
+    #[test]
+    fn detail_search_next_noop_when_no_matches() {
+        let mut d = DetailView::default();
+        d.scroll = 7;
+        d.search_next(); // no matches — scroll unchanged
+        assert_eq!(d.scroll, 7);
+    }
+
+    // ── DetailView sync_schema_tree ───────────────────────────────────────────
+
+    #[test]
+    fn sync_schema_tree_resets_on_key_change() {
+        let mut d = DetailView::default();
+        d.in_tree = true;
+        d.tree_len = 5;
+        d.scroll = 20;
+        d.sync_schema_tree(Some((0, 0, 0)));
+        // Key is now set — call again with same key: should NOT reset.
+        d.in_tree = true;
+        d.sync_schema_tree(Some((0, 0, 0)));
+        assert!(d.in_tree, "should not reset when key unchanged");
+
+        // Call with a different key: should reset.
+        d.sync_schema_tree(Some((0, 0, 1)));
+        assert!(!d.in_tree, "should reset when key changes");
+        assert_eq!(d.tree_len, 0);
+        assert!(d.focused_resp_tree.is_none());
+    }
+
+    #[test]
+    fn sync_schema_tree_resets_on_none_to_some() {
+        let mut d = DetailView::default();
+        // Initial key is None; setting to Some should trigger reset.
+        d.in_tree = true;
+        d.sync_schema_tree(Some((1, 2, 3)));
+        assert!(!d.in_tree);
+    }
+}

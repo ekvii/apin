@@ -69,14 +69,16 @@ jobs:
             if [ "$HIGHER" = "$CARGO_VERSION" ] && [ "$CARGO_VERSION" != "$LATEST" ]; then
               # Cargo.toml is already ahead of the latest tag — use it as-is
               NEXT="$CARGO_VERSION"
+              echo "Using developer-bumped version ${NEXT} from Cargo.toml"
             else
               # Auto-bump patch
               IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
               NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
               # Update version in Cargo.toml
-              sed -i "s/^version = \"${CARGO_VERSION}\"/version = \"${NEXT}\"/" Cargo.toml
+              sed -i -E "s/^version[[:space:]]*=[[:space:]]*\"${CARGO_VERSION}\"/version     = \"${NEXT}\"/" Cargo.toml
               # Refresh Cargo.lock to reflect the new version
               cargo update --workspace
+              echo "Auto-bumped version to ${NEXT} (latest tag was ${LATEST})"
             fi
           fi
 

@@ -1359,8 +1359,7 @@ mod tests {
 
     #[test]
     fn detail_scroll_top_resets_to_zero() {
-        let mut d = DetailView::default();
-        d.scroll = 42;
+        let mut d = DetailView { scroll: 42, ..DetailView::default() };
         d.scroll_top();
         assert_eq!(d.scroll, 0);
     }
@@ -1375,10 +1374,12 @@ mod tests {
 
     #[test]
     fn detail_back_clears_in_tree_and_scroll() {
-        let mut d = DetailView::default();
-        d.in_tree = true;
-        d.scroll = 99;
-        d.focused_resp_tree = Some(0);
+        let mut d = DetailView {
+            in_tree: true,
+            scroll: 99,
+            focused_resp_tree: Some(0),
+            ..DetailView::default()
+        };
         d.back();
         assert_eq!(d.scroll, 0);
         assert!(!d.in_tree);
@@ -1389,10 +1390,11 @@ mod tests {
 
     #[test]
     fn detail_search_cancel_clears_everything() {
-        let mut d = DetailView::default();
-        d.search.active = true;
-        d.search.query = "hello".into();
-        d.search_matches = vec![1, 2, 3];
+        let mut d = DetailView {
+            search: Search { active: true, query: "hello".into() },
+            search_matches: vec![1, 2, 3],
+            ..DetailView::default()
+        };
         d.search_cancel();
         assert!(!d.search.active);
         assert!(d.search.query.is_empty());
@@ -1401,10 +1403,10 @@ mod tests {
 
     #[test]
     fn detail_search_next_cycles_through_matches() {
-        let mut d = DetailView::default();
-        d.search_matches = vec![0, 5, 10];
-        d.search_cursor = 0;
-        d.scroll = 0;
+        let mut d = DetailView {
+            search_matches: vec![0, 5, 10],
+            ..DetailView::default()
+        };
 
         d.search_next();
         assert_eq!(d.search_cursor, 1);
@@ -1422,10 +1424,10 @@ mod tests {
 
     #[test]
     fn detail_search_prev_cycles_backwards() {
-        let mut d = DetailView::default();
-        d.search_matches = vec![0, 5, 10];
-        d.search_cursor = 0;
-        d.scroll = 0;
+        let mut d = DetailView {
+            search_matches: vec![0, 5, 10],
+            ..DetailView::default()
+        };
 
         // Going prev from 0 wraps to last.
         d.search_prev();
@@ -1439,8 +1441,7 @@ mod tests {
 
     #[test]
     fn detail_search_next_noop_when_no_matches() {
-        let mut d = DetailView::default();
-        d.scroll = 7;
+        let mut d = DetailView { scroll: 7, ..DetailView::default() };
         d.search_next(); // no matches — scroll unchanged
         assert_eq!(d.scroll, 7);
     }
@@ -1449,10 +1450,12 @@ mod tests {
 
     #[test]
     fn sync_schema_tree_resets_on_key_change() {
-        let mut d = DetailView::default();
-        d.in_tree = true;
-        d.tree_len = 5;
-        d.scroll = 20;
+        let mut d = DetailView {
+            in_tree: true,
+            tree_len: 5,
+            scroll: 20,
+            ..DetailView::default()
+        };
         d.sync_schema_tree(Some((0, 0, 0)));
         // Key is now set — call again with same key: should NOT reset.
         d.in_tree = true;
@@ -1468,9 +1471,8 @@ mod tests {
 
     #[test]
     fn sync_schema_tree_resets_on_none_to_some() {
-        let mut d = DetailView::default();
+        let mut d = DetailView { in_tree: true, ..DetailView::default() };
         // Initial key is None; setting to Some should trigger reset.
-        d.in_tree = true;
         d.sync_schema_tree(Some((1, 2, 3)));
         assert!(!d.in_tree);
     }

@@ -950,6 +950,76 @@ impl ApinApp {
     }
 }
 
+fn draw_loading(frame: &mut Frame, tick: u8) {
+    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spinner = FRAMES[tick as usize % FRAMES.len()];
+    let text = format!("{} loading specs…", spinner);
+
+    let area = frame.area();
+    let y = area.height / 2;
+    let x = area.width.saturating_sub(text.chars().count() as u16) / 2;
+    let inner = Rect {
+        x,
+        y,
+        width: text.chars().count() as u16,
+        height: 1,
+    };
+
+    let msg = Paragraph::new(text.as_str()).style(Style::default().fg(Color::Gray));
+    frame.render_widget(msg, inner);
+}
+
+fn draw_frame(
+    frame: &mut Frame,
+    specs: &[Spec],
+    focus: &Focus,
+    specs_state: &mut ListState,
+    trees: &[TreeCursor],
+    ops: &mut OpsState,
+    detail: &mut DetailView,
+) {
+    use super::components::{hint_bar, path_detail, spec_list, tree_columns};
+
+    let area = frame.area();
+
+    // Full-screen detail mode: skip the normal layout entirely.
+    if *focus == Focus::Detail {
+        let vert = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+        detail.draw(frame, specs, specs_state, trees, ops, vert[0]);
+        hint_bar::draw(frame, focus, ops, &detail.in_tree, &detail.search, vert[1]);
+        return;
+    }
+
+    let multi_spec = specs.len() > 1;
+
+    let content_area = if multi_spec {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+            .split(area);
+        spec_list::draw(frame, specs, focus, specs_state, cols[0]);
+        cols[1]
+    } else {
+        area
+    };
+
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(content_area);
+
+    tree_columns::draw(frame, specs, focus, specs_state, trees, ops, vert[0]);
+    path_detail::draw(frame, specs, focus, specs_state, trees, ops, vert[1]);
+    hint_bar::draw(frame, focus, ops, &detail.in_tree, &detail.search, vert[2]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1193,9 +1263,7 @@ mod tests {
         let mut cursor = make_cursor(&["/alpha", "/beta", "/gamma"]);
         // Select "gamma" (index 2).
         cursor.levels[0].selected = 2;
-        // Now apply a filter that doesn't include "gamma".
-        cursor.search.query = "a".into(); // matches "alpha" and "gamma" and "beta"? no: "alpha","gamma"
-                                          // Actually "gamma" contains 'a' so let's use "al" which only matches "alpha".
+        // "al" only matches "alpha", so the selection must jump there.
         cursor.search.query = "al".into();
         cursor.search_clamp_selection();
         // Selection should have jumped to "alpha" (index 0).
@@ -1253,74 +1321,4 @@ mod tests {
         };
         assert_eq!(single_leaf(&root), None);
     }
-}
-
-fn draw_loading(frame: &mut Frame, tick: u8) {
-    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let spinner = FRAMES[tick as usize % FRAMES.len()];
-    let text = format!("{} loading specs…", spinner);
-
-    let area = frame.area();
-    let y = area.height / 2;
-    let x = area.width.saturating_sub(text.chars().count() as u16) / 2;
-    let inner = Rect {
-        x,
-        y,
-        width: text.chars().count() as u16,
-        height: 1,
-    };
-
-    let msg = Paragraph::new(text.as_str()).style(Style::default().fg(Color::Gray));
-    frame.render_widget(msg, inner);
-}
-
-fn draw_frame(
-    frame: &mut Frame,
-    specs: &[Spec],
-    focus: &Focus,
-    specs_state: &mut ListState,
-    trees: &[TreeCursor],
-    ops: &mut OpsState,
-    detail: &mut DetailView,
-) {
-    use super::components::{hint_bar, path_detail, spec_list, tree_columns};
-
-    let area = frame.area();
-
-    // Full-screen detail mode: skip the normal layout entirely.
-    if *focus == Focus::Detail {
-        let vert = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(area);
-        detail.draw(frame, specs, specs_state, trees, ops, vert[0]);
-        hint_bar::draw(frame, focus, ops, &detail.in_tree, &detail.search, vert[1]);
-        return;
-    }
-
-    let multi_spec = specs.len() > 1;
-
-    let content_area = if multi_spec {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-            .split(area);
-        spec_list::draw(frame, specs, focus, specs_state, cols[0]);
-        cols[1]
-    } else {
-        area
-    };
-
-    let vert = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(content_area);
-
-    tree_columns::draw(frame, specs, focus, specs_state, trees, ops, vert[0]);
-    path_detail::draw(frame, specs, focus, specs_state, trees, ops, vert[1]);
-    hint_bar::draw(frame, focus, ops, &detail.in_tree, &detail.search, vert[2]);
 }

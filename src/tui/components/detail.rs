@@ -7,7 +7,7 @@ use ratatui::{
 };
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
-use crate::spec::{PathKind, SchemaKindHint, SchemaNode, Spec};
+use crate::spec::{Operation, PathKind, RequestBody, Response, SchemaKindHint, SchemaNode, Spec};
 
 use super::super::app::{OpsState, TreeCursor};
 
@@ -37,6 +37,25 @@ impl Search {
 }
 
 // ─── DetailView ───────────────────────────────────────────────────────────────
+
+/// Holds pre-computed data for one response that has an associated schema tree.
+struct RespTreeSlot {
+    /// Index into `op.responses` this slot belongs to.
+    resp_idx: usize,
+    /// 1-based hotkey digit shown in the hint (1, 2, 3, …).
+    hotkey: usize,
+    owned_children: Vec<SchemaNode>,
+    id_start: usize,
+}
+
+/// Layout segment kind used in the virtual-scroll rendering pass.
+enum Seg {
+    TextAbove,
+    ReqTree,
+    TextBelow,
+    RespTree(usize), // slot index
+    Pad,             // blank trailing lines after focused resp tree
+}
 
 /// All state and rendering logic for the full-screen operation detail panel.
 #[derive(Default)]
@@ -390,182 +409,9 @@ impl DetailView {
 
         let mut lines: Vec<Line> = Vec::new();
 
-        // ┌─ METHOD  PATH ──────────────────────────────────────────────────────┐
-        let badge_style = method_color(&op.method).add_modifier(Modifier::BOLD);
-        let mut title_line = vec![
-            Span::styled(format!(" {} ", op.method), badge_style),
-            Span::raw("  "),
-        ];
-        // Gap A: [WH] tag for webhook entries
-        if is_webhook {
-            title_line.push(Span::styled(
-                "[WH] ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        title_line.push(Span::styled(
-            path_str.clone(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-        // Gap C: [DEPRECATED] badge for the operation
-        if op.deprecated {
-            title_line.push(Span::raw("  "));
-            title_line.push(Span::styled(
-                "[deprecated]",
-                Style::default().fg(Color::LightRed),
-            ));
-        }
-        lines.push(Line::from(title_line));
-
-        // Gap B: tags chips
-        if !op.tags.is_empty() {
-            let mut tag_spans: Vec<Span> = vec![Span::raw("  ")];
-            for tag in &op.tags {
-                tag_spans.push(Span::styled(
-                    format!("[{}]", tag),
-                    Style::default().fg(Color::Cyan),
-                ));
-                tag_spans.push(Span::raw("  "));
-            }
-            lines.push(Line::from(tag_spans));
-        }
-        lines.push(Line::raw(""));
-
-        // ── Summary ───────────────────────────────────────────────────────────
-        if let Some(ref sum) = op.summary {
-            lines.push(Line::from(vec![
-                Span::styled("  Summary      ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    sum.clone(),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-        }
-
-        // ── Operation ID ──────────────────────────────────────────────────────
-        if let Some(ref oid) = op.operation_id {
-            lines.push(Line::from(vec![
-                Span::styled("  Operation ID ", Style::default().fg(Color::DarkGray)),
-                Span::styled(oid.clone(), Style::default().fg(Color::Cyan)),
-            ]));
-        }
-
-        // ── Description ───────────────────────────────────────────────────────
-        if let Some(ref desc) = op.description
-            && op.summary.as_deref() != Some(desc.as_str())
-        {
-                lines.push(Line::raw(""));
-                lines.push(Line::from(Span::styled(
-                    "  Description",
-                    Style::default().fg(Color::DarkGray),
-                )));
-                for desc_line in desc.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("    {}", desc_line),
-                        Style::default().fg(Color::Gray),
-                    )));
-                }
-        }
-
-        // ── Parameters ────────────────────────────────────────────────────────
-        if !op.params.is_empty() {
-            lines.push(Line::raw(""));
-            lines.push(Line::from(Span::styled(
-                divider.clone(),
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "  PARAMETERS",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::raw(""));
-
-            let locations = [
-                ("path", Color::Magenta),
-                ("query", Color::Cyan),
-                ("header", Color::Blue),
-                ("cookie", Color::Green),
-            ];
-
-            for (loc, loc_color) in locations {
-                let group: Vec<_> = op.params.iter().filter(|p| p.location == loc).collect();
-                if group.is_empty() {
-                    continue;
-                }
-
-                // Location header
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!(" {} ", loc.to_uppercase()),
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(loc_color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
-
-                // Column headers
-                lines.push(Line::from(vec![Span::styled(
-                    "    name                 type       tags   description",
-                    Style::default().fg(Color::DarkGray),
-                )]));
-
-                for p in &group {
-                    let name_style = if p.deprecated {
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::CROSSED_OUT)
-                    } else if p.required {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-                    let name_padded = format!("{:<22}", p.name.clone());
-                    // Bug E: use actual schema type instead of hardcoded "string"
-                    let type_str = p.schema_type.as_deref().unwrap_or("string");
-                    let mut param_row = vec![
-                        Span::raw("    "),
-                        Span::styled(name_padded, name_style),
-                        Span::styled(
-                            format!("{:<10} ", type_str),
-                            Style::default().fg(Color::Blue),
-                        ),
-                    ];
-                    if p.required {
-                        param_row.push(Span::styled(
-                            "[required]",
-                            Style::default().fg(Color::Red),
-                        ));
-                        param_row.push(Span::raw(" "));
-                    }
-                    if p.deprecated {
-                        param_row.push(Span::styled(
-                            "[deprecated]",
-                            Style::default().fg(Color::LightRed),
-                        ));
-                        param_row.push(Span::raw(" "));
-                    }
-                    if let Some(ref desc) = p.description {
-                        param_row
-                            .push(Span::styled(desc.clone(), Style::default().fg(Color::Gray)));
-                    }
-                    lines.push(Line::from(param_row));
-                }
-                lines.push(Line::raw(""));
-            }
-        }
+        lines.extend(title_lines(&op, &path_str, is_webhook));
+        lines.extend(meta_lines(&op));
+        lines.extend(params_lines(&op, &divider));
 
         // ── Request body header ───────────────────────────────────────────────
         let schema_node_opt = op
@@ -582,77 +428,13 @@ impl DetailView {
             };
 
         if let Some(ref rb) = op.request_body {
-            lines.push(Line::from(Span::styled(
-                divider.clone(),
-                Style::default().fg(Color::DarkGray),
-            )));
-            // Gap M: show (required) / (optional) in REQUEST BODY header
-            let req_label = if rb.required {
-                Span::styled(
-                    " (required)",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled(" (optional)", Style::default().fg(Color::DarkGray))
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  REQUEST BODY",
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                req_label,
-            ]));
-            lines.push(Line::raw(""));
-
-            if let Some(ref desc) = rb.description {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(desc.clone(), Style::default().fg(Color::Gray)),
-                ]));
-                lines.push(Line::raw(""));
-            }
-
-            if !has_schema {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        "(schema not available)",
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-                lines.push(Line::raw(""));
-            } else {
-                let hint_style = Style::default().fg(Color::DarkGray);
-                lines.push(Line::from(vec![
-                    Span::styled("  ", hint_style),
-                    Span::styled("[f]", Style::default().fg(Color::Yellow)),
-                    Span::styled(" focus/unfocus  ", hint_style),
-                    Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
-                    Span::styled(" navigate  ", hint_style),
-                    Span::styled("[h/l]", Style::default().fg(Color::Yellow)),
-                    Span::styled(" collapse/expand", hint_style),
-                ]));
-                lines.push(Line::raw(""));
-            }
+            lines.extend(request_body_lines(rb, has_schema, &divider));
         }
 
         // ── Responses ────────────────────────────────────────────────────────
         // Build per-response schema tree children (only for responses that have
         // a schema_tree).  We assign a 1-based hotkey to each such response in
         // the order they appear.
-        struct RespTreeSlot {
-            /// Index into `op.responses` this slot belongs to.
-            resp_idx: usize,
-            /// 1-based hotkey digit shown in the hint (1, 2, 3, …).
-            hotkey: usize,
-            owned_children: Vec<SchemaNode>,
-            id_start: usize,
-        }
-
         let mut resp_tree_slots: Vec<RespTreeSlot> = Vec::new();
         {
             let mut hotkey = 1usize;
@@ -681,60 +463,16 @@ impl DetailView {
         let mut lines_below: Vec<Line> = Vec::new();
 
         if !op.responses.is_empty() {
-            let target: &mut Vec<Line> = if has_schema {
-                &mut lines_below
-            } else {
-                &mut lines
-            };
-            target.push(Line::from(Span::styled(
-                divider.clone(),
-                Style::default().fg(Color::DarkGray),
-            )));
-            target.push(Line::from(Span::styled(
-                "  RESPONSES",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            target.push(Line::raw(""));
-            target.push(Line::from(Span::styled(
-                "    code    description",
-                Style::default().fg(Color::DarkGray),
-            )));
-
-            // Assign hotkeys by matching slots
             let hotkey_for_resp: std::collections::HashMap<usize, usize> = resp_tree_slots
                 .iter()
                 .map(|s| (s.resp_idx, s.hotkey))
                 .collect();
-
-            for (resp_idx, resp) in op.responses.iter().enumerate() {
-                let badge = Span::styled(
-                    format!(" {} ", resp.code),
-                    response_code_style(&resp.code).add_modifier(Modifier::BOLD),
-                );
-                let desc_span = if let Some(ref d) = resp.description {
-                    Span::styled(format!("  {}", d), Style::default().fg(Color::Gray))
-                } else {
-                    Span::raw("")
-                };
-                let mut row = vec![Span::raw("    "), badge, desc_span];
-
-                // If this response has a schema tree, show the hotkey hint.
-                if let Some(&hk) = hotkey_for_resp.get(&resp_idx) {
-                    row.push(Span::raw("  "));
-                    row.push(Span::styled(
-                        format!("[{}]", hk),
-                        Style::default().fg(Color::Yellow),
-                    ));
-                    row.push(Span::styled(
-                        " schema",
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                target.push(Line::from(row));
+            let resp_lines = responses_lines(&op.responses, &hotkey_for_resp, &divider);
+            if has_schema {
+                lines_below.extend(resp_lines);
+            } else {
+                lines.extend(resp_lines);
             }
-            target.push(Line::raw(""));
         }
 
         // ── Virtual scroll layout ─────────────────────────────────────────────
@@ -898,14 +636,6 @@ impl DetailView {
 
         // ── Build the ordered list of layout segments ─────────────────────────
         // Each segment is: (virtual_start, virtual_end, SegmentKind)
-        enum Seg {
-            TextAbove,
-            ReqTree,
-            TextBelow,
-            RespTree(usize), // slot index
-            Pad,             // blank trailing lines after focused resp tree
-        }
-
         let mut segments: Vec<(usize, usize, Seg)> = Vec::new();
         if lines_above_len > 0 {
             segments.push((0, lines_above_len, Seg::TextAbove));
@@ -1299,6 +1029,315 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+// ─── Content-line builders ────────────────────────────────────────────────────
+
+/// Build the title row (method badge + [WH] + path + [deprecated]) and the
+/// optional tags row, followed by a blank line.
+fn title_lines(op: &Operation, path_str: &str, is_webhook: bool) -> Vec<Line<'static>> {
+    let badge_style = method_color(&op.method).add_modifier(Modifier::BOLD);
+    let mut title_spans = vec![
+        Span::styled(format!(" {} ", op.method), badge_style),
+        Span::raw("  "),
+    ];
+    if is_webhook {
+        title_spans.push(Span::styled(
+            "[WH] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    title_spans.push(Span::styled(
+        path_str.to_string(),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    if op.deprecated {
+        title_spans.push(Span::raw("  "));
+        title_spans.push(Span::styled(
+            "[deprecated]",
+            Style::default().fg(Color::LightRed),
+        ));
+    }
+
+    let mut out: Vec<Line<'static>> = vec![Line::from(title_spans)];
+
+    if !op.tags.is_empty() {
+        let mut tag_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        for tag in &op.tags {
+            tag_spans.push(Span::styled(
+                format!("[{}]", tag),
+                Style::default().fg(Color::Cyan),
+            ));
+            tag_spans.push(Span::raw("  "));
+        }
+        out.push(Line::from(tag_spans));
+    }
+    out.push(Line::raw(""));
+    out
+}
+
+/// Build the Summary, Operation ID, and Description rows.
+fn meta_lines(op: &Operation) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    if let Some(ref sum) = op.summary {
+        out.push(Line::from(vec![
+            Span::styled("  Summary      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                sum.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    if let Some(ref oid) = op.operation_id {
+        out.push(Line::from(vec![
+            Span::styled("  Operation ID ", Style::default().fg(Color::DarkGray)),
+            Span::styled(oid.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    }
+
+    if let Some(ref desc) = op.description
+        && op.summary.as_deref() != Some(desc.as_str())
+    {
+        out.push(Line::raw(""));
+        out.push(Line::from(Span::styled(
+            "  Description",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for desc_line in desc.lines() {
+            out.push(Line::from(Span::styled(
+                format!("    {}", desc_line),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+
+    out
+}
+
+/// Build the PARAMETERS section lines (blank + divider + header + groups).
+/// Returns an empty `Vec` when the operation has no parameters.
+fn params_lines(op: &Operation, divider: &str) -> Vec<Line<'static>> {
+    if op.params.is_empty() {
+        return vec![];
+    }
+
+    let mut out: Vec<Line<'static>> = vec![
+        Line::raw(""),
+        Line::from(Span::styled(
+            divider.to_string(),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  PARAMETERS",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+
+    let locations = [
+        ("path", Color::Magenta),
+        ("query", Color::Cyan),
+        ("header", Color::Blue),
+        ("cookie", Color::Green),
+    ];
+
+    for (loc, loc_color) in locations {
+        let group: Vec<_> = op.params.iter().filter(|p| p.location == loc).collect();
+        if group.is_empty() {
+            continue;
+        }
+
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!(" {} ", loc.to_uppercase()),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(loc_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        out.push(Line::from(vec![Span::styled(
+            "    name                 type       tags   description",
+            Style::default().fg(Color::DarkGray),
+        )]));
+
+        for p in &group {
+            let name_style = if p.deprecated {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::CROSSED_OUT)
+            } else if p.required {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            let name_padded = format!("{:<22}", p.name.clone());
+            let type_str = p.schema_type.as_deref().unwrap_or("string");
+            let mut param_row: Vec<Span<'static>> = vec![
+                Span::raw("    "),
+                Span::styled(name_padded, name_style),
+                Span::styled(
+                    format!("{:<10} ", type_str),
+                    Style::default().fg(Color::Blue),
+                ),
+            ];
+            if p.required {
+                param_row.push(Span::styled(
+                    "[required]",
+                    Style::default().fg(Color::Red),
+                ));
+                param_row.push(Span::raw(" "));
+            }
+            if p.deprecated {
+                param_row.push(Span::styled(
+                    "[deprecated]",
+                    Style::default().fg(Color::LightRed),
+                ));
+                param_row.push(Span::raw(" "));
+            }
+            if let Some(ref desc) = p.description {
+                param_row.push(Span::styled(desc.clone(), Style::default().fg(Color::Gray)));
+            }
+            out.push(Line::from(param_row));
+        }
+        out.push(Line::raw(""));
+    }
+
+    out
+}
+
+/// Build the REQUEST BODY header block (divider + title + description + hint).
+fn request_body_lines(rb: &RequestBody, has_schema: bool, divider: &str) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    out.push(Line::from(Span::styled(
+        divider.to_string(),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let req_label = if rb.required {
+        Span::styled(
+            " (required)",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(" (optional)", Style::default().fg(Color::DarkGray))
+    };
+    out.push(Line::from(vec![
+        Span::styled(
+            "  REQUEST BODY",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        req_label,
+    ]));
+    out.push(Line::raw(""));
+
+    if let Some(ref desc) = rb.description {
+        out.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(desc.clone(), Style::default().fg(Color::Gray)),
+        ]));
+        out.push(Line::raw(""));
+    }
+
+    if !has_schema {
+        out.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                "(schema not available)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        out.push(Line::raw(""));
+    } else {
+        let hint_style = Style::default().fg(Color::DarkGray);
+        out.push(Line::from(vec![
+            Span::styled("  ", hint_style),
+            Span::styled("[f]", Style::default().fg(Color::Yellow)),
+            Span::styled(" focus/unfocus  ", hint_style),
+            Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
+            Span::styled(" navigate  ", hint_style),
+            Span::styled("[h/l]", Style::default().fg(Color::Yellow)),
+            Span::styled(" collapse/expand", hint_style),
+        ]));
+        out.push(Line::raw(""));
+    }
+
+    out
+}
+
+/// Build the RESPONSES section lines (divider + header + per-response rows).
+/// `hotkey_for_resp` maps response index → 1-based hotkey digit for responses
+/// that have an associated schema tree.
+fn responses_lines(
+    responses: &[Response],
+    hotkey_for_resp: &std::collections::HashMap<usize, usize>,
+    divider: &str,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = vec![
+        Line::from(Span::styled(
+            divider.to_string(),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  RESPONSES",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "    code    description",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    for (resp_idx, resp) in responses.iter().enumerate() {
+        let badge = Span::styled(
+            format!(" {} ", resp.code),
+            response_code_style(&resp.code).add_modifier(Modifier::BOLD),
+        );
+        let desc_span = if let Some(ref d) = resp.description {
+            Span::styled(format!("  {}", d), Style::default().fg(Color::Gray))
+        } else {
+            Span::raw("")
+        };
+        let mut row: Vec<Span<'static>> = vec![Span::raw("    "), badge, desc_span];
+
+        if let Some(&hk) = hotkey_for_resp.get(&resp_idx) {
+            row.push(Span::raw("  "));
+            row.push(Span::styled(
+                format!("[{}]", hk),
+                Style::default().fg(Color::Yellow),
+            ));
+            row.push(Span::styled(
+                " schema",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        out.push(Line::from(row));
+    }
+    out.push(Line::raw(""));
+
+    out
 }
 
 #[cfg(test)]

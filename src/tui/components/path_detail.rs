@@ -6,10 +6,214 @@ use ratatui::{
     widgets::{Block, Borders, ListState, Paragraph, Wrap},
 };
 
-use crate::spec::{PathKind, Spec};
+use crate::spec::{Operation, Param, PathKind, RequestBody, Response, Spec};
 
 use super::super::app::{Focus, OpsState, TreeCursor};
 use super::styles::{border_style, method_color, response_code_style, truncate};
+
+// ── Key column ────────────────────────────────────────────────────────────────
+
+const KEY_W: usize = 8;
+
+fn key(label: &str) -> Span<'static> {
+    Span::styled(
+        format!("  {:<KEY_W$}", label),
+        Style::default().fg(Color::DarkGray),
+    )
+}
+
+// ── Per-block line builders ───────────────────────────────────────────────────
+
+/// `[METHOD]  [deprecated]  summary / operation_id`
+fn header_line(op: &Operation) -> Line<'static> {
+    let badge_style = method_color(&op.method).add_modifier(Modifier::BOLD);
+    let mut spans = vec![
+        Span::styled(format!(" {} ", op.method), badge_style),
+        Span::raw("  "),
+    ];
+    if op.deprecated {
+        spans.push(Span::styled(
+            "[deprecated] ",
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(ref sum) = op.summary {
+        spans.push(Span::styled(
+            sum.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(ref oid) = op.operation_id {
+        spans.push(Span::styled(
+            oid.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// `  desc    <first line of description, truncated>`
+/// Returns `None` when there is nothing worth showing.
+fn desc_line(op: &Operation, area_width: u16) -> Option<Line<'static>> {
+    let desc = op.description.as_deref()?;
+    // Skip when description duplicates the summary.
+    if op.summary.as_deref() == Some(desc) {
+        return None;
+    }
+    let first = desc.lines().next().unwrap_or("").trim();
+    if first.is_empty() {
+        return None;
+    }
+    let max_w = (area_width as usize).saturating_sub(2 + KEY_W + 4);
+    Some(Line::from(vec![
+        key("desc"),
+        Span::styled(truncate(first, max_w), Style::default().fg(Color::Gray)),
+    ]))
+}
+
+/// `  <loc>   name*  other  ~~deprecated~~`
+/// One line per non-empty location group among query / header / cookie.
+fn param_lines(params: &[Param]) -> Vec<Line<'static>> {
+    const LOCATIONS: &[&str] = &["query", "header", "cookie"];
+
+    LOCATIONS
+        .iter()
+        .filter_map(|&loc| {
+            let group: Vec<&Param> = params.iter().filter(|p| p.location == loc).collect();
+            if group.is_empty() {
+                return None;
+            }
+            let mut spans = vec![key(loc)];
+            for (i, p) in group.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                let name_style = if p.deprecated {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::CROSSED_OUT)
+                } else if p.required {
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                spans.push(Span::styled(p.name.clone(), name_style));
+                if p.required && !p.deprecated {
+                    spans.push(Span::styled("*", Style::default().fg(Color::Red)));
+                }
+            }
+            Some(Line::from(spans))
+        })
+        .collect()
+}
+
+/// `  body    [required object]  field  field  +N`
+/// Returns `None` when there is no request body.
+fn body_line(rb: &RequestBody) -> Option<Line<'static>> {
+    let mut spans = vec![key("body")];
+
+    if let Some(ref tree) = rb.schema_tree {
+        let req_label = if rb.required { "required" } else { "optional" };
+        let badge = format!(" {} {} ", req_label, tree.kind.label());
+        spans.push(Span::styled(
+            badge,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    }
+
+    if !rb.fields.is_empty() {
+        let take = 10.min(rb.fields.len());
+        for (i, f) in rb.fields.iter().take(take).enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                f.name.clone(),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        if rb.fields.len() > take {
+            spans.push(Span::styled(
+                format!("  +{}", rb.fields.len() - take),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    Some(Line::from(spans))
+}
+
+/// `  resp    [200] OK  [404] Not Found  [500] …`
+/// Returns `None` when there are no responses.
+fn resp_line(responses: &[Response]) -> Option<Line<'static>> {
+    if responses.is_empty() {
+        return None;
+    }
+    let mut spans = vec![key("resp")];
+    for (i, resp) in responses.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            format!(" {} ", resp.code),
+            response_code_style(&resp.code).add_modifier(Modifier::BOLD),
+        ));
+        if let Some(ref d) = resp.description {
+            spans.push(Span::styled(
+                format!(" {}", truncate(d, 20)),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        if responses.len() > 1 && i < responses.len() - 1 {
+            spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    Some(Line::from(spans))
+}
+
+/// `Enter for full detail & schemas` — shown when there is more to see.
+fn hint_line(op: &Operation) -> Option<Line<'static>> {
+    let has_schema = op
+        .request_body
+        .as_ref()
+        .and_then(|rb| rb.schema_tree.as_ref())
+        .is_some()
+        || op.responses.iter().any(|r| r.schema_tree.is_some());
+    let has_long_desc = op
+        .description
+        .as_ref()
+        .map(|d| d.lines().count() > 1 || d.len() > 80)
+        .unwrap_or(false);
+
+    if !has_schema && !has_long_desc {
+        return None;
+    }
+    Some(Line::from(vec![
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " for full detail & schemas",
+            Style::default().fg(Color::Gray),
+        ),
+    ]))
+}
+
+// ── Public draw entry point ───────────────────────────────────────────────────
 
 pub(in crate::tui) fn draw(
     frame: &mut Frame,
@@ -53,7 +257,7 @@ pub(in crate::tui) fn draw(
         }
     };
 
-    // Build block title: path + optional [WH] tag
+    // Title: path string + optional [WH] webhook badge.
     let mut title_spans: Vec<Span> = vec![Span::raw(format!(" {} ", path_str))];
     if path_kind == PathKind::Webhook {
         title_spans.push(Span::styled(
@@ -81,7 +285,7 @@ pub(in crate::tui) fn draw(
         return;
     }
 
-    // Resolve selected op index via filtered ops
+    // Resolve the selected operation index through the filtered ops list.
     let op_idx = {
         let spec = match specs.get(spec_idx) {
             Some(s) => s,
@@ -135,202 +339,17 @@ pub(in crate::tui) fn draw(
         None => return,
     };
 
-    // ── Key column width (fixed, for alignment) ───────────────────────────────
-    // All labels are padded to this width so values start at the same column.
-    const KEY_W: usize = 8;
-
-    fn key(label: &str) -> Span<'static> {
-        Span::styled(
-            format!("  {:<KEY_W$}", label),
-            Style::default().fg(Color::DarkGray),
-        )
-    }
-
+    // Assemble lines from individual block builders.
     let mut lines: Vec<Line> = Vec::new();
 
-    // ── Row 0: method badge + summary / operation_id / fallback ──────────────
-    {
-        let badge_style = method_color(&op.method).add_modifier(Modifier::BOLD);
-        let mut row = vec![
-            Span::styled(format!(" {} ", op.method), badge_style),
-            Span::raw("  "),
-        ];
-        if op.deprecated {
-            row.push(Span::styled(
-                "[deprecated] ",
-                Style::default()
-                    .fg(Color::LightRed)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        if let Some(ref sum) = op.summary {
-            row.push(Span::styled(
-                sum.as_str(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else if let Some(ref oid) = op.operation_id {
-            row.push(Span::styled(
-                oid.as_str(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        lines.push(Line::from(row));
-    }
-
-    // ── desc ─────────────────────────────────────────────────────────────────
-    // Show only the first line, truncated — full text is in detail view.
-    if let Some(ref desc) = op.description
-        && op.summary.as_deref() != Some(desc.as_str())
-    {
-        let first_line = desc.lines().next().unwrap_or("").trim();
-        if !first_line.is_empty() {
-            // Reserve room for the key prefix (2 + KEY_W) and borders (2).
-            let max_w = (area.width as usize).saturating_sub(2 + KEY_W + 4);
-            lines.push(Line::from(vec![
-                key("desc"),
-                Span::styled(
-                    truncate(first_line, max_w),
-                    Style::default().fg(Color::Gray),
-                ),
-            ]));
-        }
-    }
-
-    // ── Parameters: one row per location ─────────────────────────────────────
-    let locations = vec!["query", "header", "cookie"];
-
-    for loc in locations {
-        let group: Vec<_> = op.params.iter().filter(|p| p.location == loc).collect();
-        if group.is_empty() {
-            continue;
-        }
-        let mut row = vec![key(loc)];
-        for (i, p) in group.iter().enumerate() {
-            if i > 0 {
-                row.push(Span::raw("  "));
-            }
-            // Name: white if required, gray otherwise; strikethrough if deprecated
-            let name_style = if p.deprecated {
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::CROSSED_OUT)
-            } else if p.required {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            row.push(Span::styled(p.name.clone(), name_style));
-            // * suffix for required
-            if p.required && !p.deprecated {
-                row.push(Span::styled("*", Style::default().fg(Color::Red)));
-            }
-        }
-        lines.push(Line::from(row));
-    }
-
-    // ── body ─────────────────────────────────────────────────────────────────
-    if let Some(ref rb) = op.request_body {
-        let mut row = vec![key("body")];
-
-        // Schema kind + required/optional as a single badge string
-        if let Some(ref tree) = rb.schema_tree {
-            let req_label = if rb.required { "required" } else { "optional" };
-            let badge = format!(" {} {} ", req_label, tree.kind.label());
-            row.push(Span::styled(
-                badge,
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            row.push(Span::raw("  "));
-        }
-
-        // Field names (up to 4), then +N more
-        if !rb.fields.is_empty() {
-            let take = 10.min(rb.fields.len());
-            for (i, f) in rb.fields.iter().take(take).enumerate() {
-                if i > 0 {
-                    row.push(Span::raw("  "));
-                }
-                row.push(Span::styled(
-                    f.name.clone(),
-                    Style::default().fg(Color::Gray),
-                ));
-            }
-            if rb.fields.len() > take {
-                row.push(Span::styled(
-                    format!("  +{}", rb.fields.len() - take),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-        }
-
-        lines.push(Line::from(row));
-    }
-
-    // ── resp ─────────────────────────────────────────────────────────────────
-    // All response codes inline on one row, each as a colored badge.
-    if !op.responses.is_empty() {
-        let mut row = vec![key("resp")];
-        for (i, resp) in op.responses.iter().enumerate() {
-            if i > 0 {
-                row.push(Span::raw(" "));
-            }
-            row.push(Span::styled(
-                format!(" {} ", resp.code),
-                response_code_style(&resp.code).add_modifier(Modifier::BOLD),
-            ));
-            // Short description after the badge (truncated)
-            if let Some(ref d) = resp.description {
-                row.push(Span::styled(
-                    format!(" {}", truncate(d, 20)),
-                    Style::default().fg(Color::Gray),
-                ));
-            }
-            // Separate responses visually if there are multiple
-            if op.responses.len() > 1 && i < op.responses.len() - 1 {
-                row.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
-            }
-        }
-        lines.push(Line::from(row));
-    }
-
-    // ── hint ─────────────────────────────────────────────────────────────────
-    // Nudge user toward full-screen detail for schemas / full descriptions.
-    let has_schema = op
-        .request_body
-        .as_ref()
-        .and_then(|rb| rb.schema_tree.as_ref())
-        .is_some()
-        || op.responses.iter().any(|r| r.schema_tree.is_some());
-    let has_long_desc = op
-        .description
-        .as_ref()
-        .map(|d| d.lines().count() > 1 || d.len() > 80)
-        .unwrap_or(false);
-
-    if has_schema || has_long_desc {
-        lines.push(Line::raw("")); // empty spacer
-        lines.push(Line::from(vec![
-            // Span::raw(format!("  {:KEY_W$}", "")),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " for full detail & schemas",
-                Style::default().fg(Color::Gray),
-            ),
-        ]));
+    lines.push(header_line(op));
+    lines.extend(desc_line(op, area.width));
+    lines.extend(param_lines(&op.params));
+    lines.extend(op.request_body.as_ref().and_then(body_line));
+    lines.extend(resp_line(&op.responses));
+    if let Some(hint) = hint_line(op) {
+        lines.push(Line::raw(""));
+        lines.push(hint);
     }
 
     let detail = Paragraph::new(lines)

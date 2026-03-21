@@ -12,6 +12,15 @@ use super::super::app::{Focus, OpsState, TreeCursor};
 use super::path_tree::PathNode;
 use super::styles::{border_style, highlight_style, method_color};
 
+/// Per-column data collected before rendering a tree column widget.
+struct ColData {
+    items: Vec<(String, bool)>,
+    selected_in_list: usize,
+    title: String,
+    search_active: bool,
+    search_query: String,
+}
+
 const MIN_COL_WIDTH: u16 = 14;
 
 pub(in crate::tui) fn draw(
@@ -108,14 +117,6 @@ pub(in crate::tui) fn draw(
         }
 
         let is_active = is_tree_focused && col == tree_active_col;
-
-        struct ColData {
-            items: Vec<(String, bool)>,
-            selected_in_list: usize,
-            title: String,
-            search_active: bool,
-            search_query: String,
-        }
 
         let data: ColData = {
             let tree = match trees.get(spec_idx) {

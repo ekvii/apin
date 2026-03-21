@@ -50,12 +50,6 @@ jobs:
       - name: cargo test & coverage
         run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-
       - name: Bump version & push tag
         if: github.event_name == 'push' && github.ref_type == 'branch'
         run: |
@@ -109,3 +103,11 @@ jobs:
 
           # Push new commit and tag via classic PAT so GitHub treats it as a user push and triggers release.yml
           git push origin "HEAD:${{ github.ref_name }}" "$TAG"
+
+      # ── Post-quality-gate steps (do not affect build validation) ──
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+

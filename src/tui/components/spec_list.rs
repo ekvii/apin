@@ -1,6 +1,5 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
     Frame,
@@ -9,7 +8,9 @@ use ratatui::{
 use crate::spec::Spec;
 
 use super::super::app::Focus;
-use super::styles::{border_style, highlight_style};
+use super::styles::{
+    accent_text_style, border_style, highlight_style, muted_text_style, primary_text_style,
+};
 
 pub(in crate::tui) fn draw(
     frame: &mut Frame,
@@ -29,17 +30,11 @@ pub(in crate::tui) fn draw(
                 .and_then(|n| n.to_str())
                 .unwrap_or("?");
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    s.title.as_str(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(s.title.as_str(), primary_text_style()),
                 Span::raw(" "),
-                Span::styled(format!("v{}", s.version), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("v{}", s.version), accent_text_style()),
                 Span::raw(" "),
-                Span::styled(
-                    format!("[{}]", file_name),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("[{}]", file_name), muted_text_style()),
             ]))
         })
         .collect();

@@ -1,7 +1,8 @@
-use ratatui::{layout::Rect, style::Style, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, widgets::Paragraph, Frame};
 
 use super::super::app::{Focus, OpsState};
 use super::detail::Search;
+use super::styles::muted_text_style;
 
 pub(in crate::tui) fn draw(
     frame: &mut Frame,
@@ -29,6 +30,6 @@ pub(in crate::tui) fn draw(
             }
         }
     };
-    let hint = Paragraph::new(text).style(Style::default().fg(ratatui::style::Color::DarkGray));
+    let hint = Paragraph::new(text).style(muted_text_style());
     frame.render_widget(hint, area);
 }

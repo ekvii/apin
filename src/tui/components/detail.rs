@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
@@ -10,6 +10,15 @@ use tui_tree_widget::{Tree, TreeItem, TreeState};
 use crate::spec::{Operation, PathKind, RequestBody, Response, SchemaKindHint, SchemaNode, Spec};
 
 use super::super::app::{OpsState, TreeCursor};
+use super::styles::{
+    accent_text_style, border_style, deprecated_label_style, deprecated_name_style,
+    highlight_style, hint_key_style, hint_text_style, method_color, muted_text_style,
+    optional_annotation_style, param_location_badge_style, params_header_style, primary_text_style,
+    request_body_header_style, required_annotation_style, required_label_style,
+    required_name_style, response_code_style, responses_header_style, schema_root_kind_style,
+    search_match_style, secondary_border_style, secondary_highlight_style, secondary_text_style,
+    truncate, type_label_style, webhook_badge_style,
+};
 
 // ─── Search state ─────────────────────────────────────────────────────────────
 
@@ -44,6 +53,8 @@ struct RespTreeSlot {
     resp_idx: usize,
     /// 1-based hotkey digit shown in the hint (1, 2, 3, …).
     hotkey: usize,
+    /// HTTP response code string (e.g. "200", "404", "default").
+    resp_code: String,
     owned_children: Vec<SchemaNode>,
     id_start: usize,
 }
@@ -328,7 +339,7 @@ impl DetailView {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
                         "no operation selected",
-                        Style::default().fg(Color::DarkGray),
+                        muted_text_style(),
                     ))
                     .block(block),
                     area,
@@ -444,6 +455,7 @@ impl DetailView {
                     resp_tree_slots.push(RespTreeSlot {
                         resp_idx,
                         hotkey,
+                        resp_code: resp.code.clone(),
                         owned_children: ch.to_vec(),
                         id_start,
                     });
@@ -595,12 +607,8 @@ impl DetailView {
         let outer_block = Block::default()
             .borders(Borders::ALL)
             .title(title)
-            .title_style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .border_style(Style::default().fg(Color::Cyan));
+            .title_style(primary_text_style())
+            .border_style(border_style(true));
 
         let inner_area = outer_block.inner(area);
         frame.render_widget(outer_block, area);
@@ -729,23 +737,12 @@ impl DetailView {
                     let in_tree = self.in_tree;
                     let tree_block = Block::default()
                         .borders(Borders::LEFT)
-                        .border_style(if in_tree {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        });
+                        .border_style(border_style(in_tree));
                     match Tree::new(&tree_items) {
                         Ok(tree_widget) => {
                             let tree_widget = tree_widget
                                 .block(tree_block)
-                                .highlight_style(if in_tree {
-                                    Style::default()
-                                        .bg(Color::Cyan)
-                                        .fg(Color::Black)
-                                        .add_modifier(Modifier::BOLD)
-                                } else {
-                                    Style::default().bg(Color::DarkGray).fg(Color::White)
-                                })
+                                .highlight_style(highlight_style(in_tree))
                                 .highlight_symbol("  ");
                             frame.render_stateful_widget(
                                 tree_widget,
@@ -757,7 +754,7 @@ impl DetailView {
                             frame.render_widget(
                                 Paragraph::new(Span::styled(
                                     "(schema display error)",
-                                    Style::default().fg(Color::DarkGray),
+                                    muted_text_style(),
                                 )),
                                 rect,
                             );
@@ -769,26 +766,28 @@ impl DetailView {
                     let tree_items =
                         schema_children_to_tree_items(&slot.owned_children, slot.id_start);
                     let is_focused = self.focused_resp_tree == Some(slot_idx);
-                    let tree_block = Block::default()
+                    let mut tree_block = Block::default()
                         .borders(Borders::LEFT)
-                        .border_style(if is_focused {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        });
+                        .border_style(secondary_border_style(is_focused));
+                    if is_focused {
+                        let title = Line::from(vec![
+                            Span::styled(
+                                format!(" {} ", slot.resp_code),
+                                response_code_style(&slot.resp_code),
+                            ),
+                            Span::styled(
+                                format!("  [f/{}] unfocus", slot.hotkey),
+                                hint_text_style(),
+                            ),
+                        ]);
+                        tree_block = tree_block.title(title);
+                    }
                     if let Some(state) = self.resp_tree_states.get_mut(slot_idx) {
                         match Tree::new(&tree_items) {
                             Ok(tree_widget) => {
                                 let tree_widget = tree_widget
                                     .block(tree_block)
-                                    .highlight_style(if is_focused {
-                                        Style::default()
-                                            .bg(Color::Green)
-                                            .fg(Color::Black)
-                                            .add_modifier(Modifier::BOLD)
-                                    } else {
-                                        Style::default().bg(Color::DarkGray).fg(Color::White)
-                                    })
+                                    .highlight_style(secondary_highlight_style(is_focused))
                                     .highlight_symbol("  ");
                                 frame.render_stateful_widget(tree_widget, rect, state);
                             }
@@ -796,7 +795,7 @@ impl DetailView {
                                 frame.render_widget(
                                     Paragraph::new(Span::styled(
                                         "(schema display error)",
-                                        Style::default().fg(Color::DarkGray),
+                                        muted_text_style(),
                                     )),
                                     rect,
                                 );
@@ -819,18 +818,13 @@ fn schema_effective_roots(node: &SchemaNode) -> (Vec<Line<'static>>, &[SchemaNod
 
     let root_kind = node.kind.label().to_string();
     let mut root_spans: Vec<Span<'static>> = vec![
-        Span::styled("  type  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            root_kind,
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("  type  ", muted_text_style()),
+        Span::styled(root_kind, schema_root_kind_style()),
     ];
     if let Some(ref desc) = node.description {
         root_spans.push(Span::styled(
             format!("   {}", truncate(desc, 80)),
-            Style::default().fg(Color::Gray),
+            secondary_text_style(),
         ));
     }
     header.push(Line::from(root_spans));
@@ -840,13 +834,13 @@ fn schema_effective_roots(node: &SchemaNode) -> (Vec<Line<'static>>, &[SchemaNod
     {
             let items_kind = items.kind.label().to_string();
             let mut items_spans: Vec<Span<'static>> = vec![
-                Span::styled("  items ", Style::default().fg(Color::DarkGray)),
-                Span::styled(items_kind, Style::default().fg(Color::Cyan)),
+                Span::styled("  items ", muted_text_style()),
+                Span::styled(items_kind, accent_text_style()),
             ];
             if let Some(ref desc) = items.description {
                 items_spans.push(Span::styled(
                     format!("   {}", truncate(desc, 72)),
-                    Style::default().fg(Color::Gray),
+                    secondary_text_style(),
                 ));
             }
             header.push(Line::from(items_spans));
@@ -879,31 +873,26 @@ fn schema_node_to_tree_item(node: &SchemaNode, counter: &mut usize) -> TreeItem<
         Span::styled(
             node.label.clone(),
             if node.required {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+                required_name_style()
             } else {
-                Style::default().fg(Color::Cyan)
+                accent_text_style()
             },
         ),
         Span::styled(
             format!("  {}", kind_label),
-            Style::default().fg(Color::Blue),
+            type_label_style(),
         ),
     ];
 
     if node.required {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            "[required]",
-            Style::default().fg(Color::Red),
-        ));
+        spans.push(Span::styled("[required]", required_label_style()));
     }
 
     if let Some(ref desc) = node.description {
         spans.push(Span::styled(
             format!("  — {}", truncate(desc, 60)),
-            Style::default().fg(Color::Gray),
+            secondary_text_style(),
         ));
     }
 
@@ -981,53 +970,13 @@ fn highlight_matched_lines(lines: &mut [Line], offset: usize, matches: &[usize])
     if matches.is_empty() {
         return;
     }
+    let style = search_match_style();
     for (i, line) in lines.iter_mut().enumerate() {
         if matches.binary_search(&(offset + i)).is_ok() {
-            let style = Style::default().bg(Color::Yellow).fg(Color::Black);
             for span in &mut line.spans {
                 span.style = span.style.patch(style);
             }
         }
-    }
-}
-
-fn border_style(active: bool) -> Style {
-    if active {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    }
-}
-
-fn method_color(method: &str) -> Style {
-    match method {
-        "GET" => Style::default().fg(Color::Black).bg(Color::Green),
-        "POST" => Style::default().fg(Color::Black).bg(Color::Blue),
-        "PUT" => Style::default().fg(Color::Black).bg(Color::Yellow),
-        "PATCH" => Style::default().fg(Color::Black).bg(Color::Cyan),
-        "DELETE" => Style::default().fg(Color::Black).bg(Color::Red),
-        _ => Style::default().fg(Color::White).bg(Color::DarkGray),
-    }
-}
-
-fn response_code_style(code: &str) -> Style {
-    let base = Style::default().add_modifier(Modifier::BOLD);
-    match code.chars().next() {
-        Some('2') => base.fg(Color::Black).bg(Color::Green),
-        Some('3') => base.fg(Color::Black).bg(Color::Cyan),
-        Some('4') => base.fg(Color::Black).bg(Color::Yellow),
-        Some('5') => base.fg(Color::Black).bg(Color::Red),
-        _ => base.fg(Color::White).bg(Color::DarkGray),
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
     }
 }
 
@@ -1042,26 +991,12 @@ fn title_lines(op: &Operation, path_str: &str, is_webhook: bool) -> Vec<Line<'st
         Span::raw("  "),
     ];
     if is_webhook {
-        title_spans.push(Span::styled(
-            "[WH] ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ));
+        title_spans.push(Span::styled("[WH] ", webhook_badge_style()));
     }
-    title_spans.push(Span::styled(
-        path_str.to_string(),
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    ));
+    title_spans.push(Span::styled(path_str.to_string(), primary_text_style()));
     if op.deprecated {
         title_spans.push(Span::raw("  "));
-        title_spans.push(Span::styled(
-            "[deprecated]",
-            Style::default().fg(Color::LightRed),
-        ));
+        title_spans.push(Span::styled("[deprecated]", deprecated_label_style()));
     }
 
     let mut out: Vec<Line<'static>> = vec![Line::from(title_spans)];
@@ -1069,10 +1004,7 @@ fn title_lines(op: &Operation, path_str: &str, is_webhook: bool) -> Vec<Line<'st
     if !op.tags.is_empty() {
         let mut tag_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
         for tag in &op.tags {
-            tag_spans.push(Span::styled(
-                format!("[{}]", tag),
-                Style::default().fg(Color::Cyan),
-            ));
+            tag_spans.push(Span::styled(format!("[{}]", tag), accent_text_style()));
             tag_spans.push(Span::raw("  "));
         }
         out.push(Line::from(tag_spans));
@@ -1087,20 +1019,15 @@ fn meta_lines(op: &Operation) -> Vec<Line<'static>> {
 
     if let Some(ref sum) = op.summary {
         out.push(Line::from(vec![
-            Span::styled("  Summary      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                sum.clone(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("  Summary      ", muted_text_style()),
+            Span::styled(sum.clone(), primary_text_style()),
         ]));
     }
 
     if let Some(ref oid) = op.operation_id {
         out.push(Line::from(vec![
-            Span::styled("  Operation ID ", Style::default().fg(Color::DarkGray)),
-            Span::styled(oid.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled("  Operation ID ", muted_text_style()),
+            Span::styled(oid.clone(), accent_text_style()),
         ]));
     }
 
@@ -1110,12 +1037,12 @@ fn meta_lines(op: &Operation) -> Vec<Line<'static>> {
         out.push(Line::raw(""));
         out.push(Line::from(Span::styled(
             "  Description",
-            Style::default().fg(Color::DarkGray),
+            muted_text_style(),
         )));
         for desc_line in desc.lines() {
             out.push(Line::from(Span::styled(
                 format!("    {}", desc_line),
-                Style::default().fg(Color::Gray),
+                secondary_text_style(),
             )));
         }
     }
@@ -1132,27 +1059,14 @@ fn params_lines(op: &Operation, divider: &str) -> Vec<Line<'static>> {
 
     let mut out: Vec<Line<'static>> = vec![
         Line::raw(""),
-        Line::from(Span::styled(
-            divider.to_string(),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "  PARAMETERS",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled(divider.to_string(), muted_text_style())),
+        Line::from(Span::styled("  PARAMETERS", params_header_style())),
         Line::raw(""),
     ];
 
-    let locations = [
-        ("path", Color::Magenta),
-        ("query", Color::Cyan),
-        ("header", Color::Blue),
-        ("cookie", Color::Green),
-    ];
+    let locations = ["path", "query", "header", "cookie"];
 
-    for (loc, loc_color) in locations {
+    for loc in locations {
         let group: Vec<_> = op.params.iter().filter(|p| p.location == loc).collect();
         if group.is_empty() {
             continue;
@@ -1162,55 +1076,39 @@ fn params_lines(op: &Operation, divider: &str) -> Vec<Line<'static>> {
             Span::raw("  "),
             Span::styled(
                 format!(" {} ", loc.to_uppercase()),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(loc_color)
-                    .add_modifier(Modifier::BOLD),
+                param_location_badge_style(loc),
             ),
         ]));
         out.push(Line::from(vec![Span::styled(
             "    name                 type       tags   description",
-            Style::default().fg(Color::DarkGray),
+            muted_text_style(),
         )]));
 
         for p in &group {
             let name_style = if p.deprecated {
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::CROSSED_OUT)
+                deprecated_name_style()
             } else if p.required {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+                required_name_style()
             } else {
-                Style::default().fg(Color::Gray)
+                secondary_text_style()
             };
             let name_padded = format!("{:<22}", p.name.clone());
             let type_str = p.schema_type.as_deref().unwrap_or("string");
             let mut param_row: Vec<Span<'static>> = vec![
                 Span::raw("    "),
                 Span::styled(name_padded, name_style),
-                Span::styled(
-                    format!("{:<10} ", type_str),
-                    Style::default().fg(Color::Blue),
-                ),
+                Span::styled(format!("{:<10} ", type_str), type_label_style()),
             ];
             if p.required {
-                param_row.push(Span::styled(
-                    "[required]",
-                    Style::default().fg(Color::Red),
-                ));
+                param_row.push(Span::styled("[required]", required_label_style()));
                 param_row.push(Span::raw(" "));
             }
             if p.deprecated {
-                param_row.push(Span::styled(
-                    "[deprecated]",
-                    Style::default().fg(Color::LightRed),
-                ));
+                param_row.push(Span::styled("[deprecated]", deprecated_label_style()));
                 param_row.push(Span::raw(" "));
             }
             if let Some(ref desc) = p.description {
-                param_row.push(Span::styled(desc.clone(), Style::default().fg(Color::Gray)));
+                param_row.push(Span::styled(desc.clone(), secondary_text_style()));
             }
             out.push(Line::from(param_row));
         }
@@ -1224,28 +1122,15 @@ fn params_lines(op: &Operation, divider: &str) -> Vec<Line<'static>> {
 fn request_body_lines(rb: &RequestBody, has_schema: bool, divider: &str) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
 
-    out.push(Line::from(Span::styled(
-        divider.to_string(),
-        Style::default().fg(Color::DarkGray),
-    )));
+    out.push(Line::from(Span::styled(divider.to_string(), muted_text_style())));
 
     let req_label = if rb.required {
-        Span::styled(
-            " (required)",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )
+        Span::styled(" (required)", required_annotation_style())
     } else {
-        Span::styled(" (optional)", Style::default().fg(Color::DarkGray))
+        Span::styled(" (optional)", optional_annotation_style())
     };
     out.push(Line::from(vec![
-        Span::styled(
-            "  REQUEST BODY",
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("  REQUEST BODY", request_body_header_style()),
         req_label,
     ]));
     out.push(Line::raw(""));
@@ -1253,7 +1138,7 @@ fn request_body_lines(rb: &RequestBody, has_schema: bool, divider: &str) -> Vec<
     if let Some(ref desc) = rb.description {
         out.push(Line::from(vec![
             Span::raw("    "),
-            Span::styled(desc.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(desc.clone(), secondary_text_style()),
         ]));
         out.push(Line::raw(""));
     }
@@ -1261,22 +1146,18 @@ fn request_body_lines(rb: &RequestBody, has_schema: bool, divider: &str) -> Vec<
     if !has_schema {
         out.push(Line::from(vec![
             Span::raw("    "),
-            Span::styled(
-                "(schema not available)",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("(schema not available)", muted_text_style()),
         ]));
         out.push(Line::raw(""));
     } else {
-        let hint_style = Style::default().fg(Color::DarkGray);
         out.push(Line::from(vec![
-            Span::styled("  ", hint_style),
-            Span::styled("[f]", Style::default().fg(Color::Yellow)),
-            Span::styled(" focus/unfocus  ", hint_style),
-            Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
-            Span::styled(" navigate  ", hint_style),
-            Span::styled("[h/l]", Style::default().fg(Color::Yellow)),
-            Span::styled(" collapse/expand", hint_style),
+            Span::styled("  ", hint_text_style()),
+            Span::styled("[f]", hint_key_style()),
+            Span::styled(" focus/unfocus  ", hint_text_style()),
+            Span::styled("[j/k]", hint_key_style()),
+            Span::styled(" navigate  ", hint_text_style()),
+            Span::styled("[h/l]", hint_key_style()),
+            Span::styled(" collapse/expand", hint_text_style()),
         ]));
         out.push(Line::raw(""));
     }
@@ -1293,30 +1174,22 @@ fn responses_lines(
     divider: &str,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = vec![
-        Line::from(Span::styled(
-            divider.to_string(),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "  RESPONSES",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled(divider.to_string(), muted_text_style())),
+        Line::from(Span::styled("  RESPONSES", responses_header_style())),
         Line::raw(""),
         Line::from(Span::styled(
             "    code    description",
-            Style::default().fg(Color::DarkGray),
+            muted_text_style(),
         )),
     ];
 
     for (resp_idx, resp) in responses.iter().enumerate() {
         let badge = Span::styled(
             format!(" {} ", resp.code),
-            response_code_style(&resp.code).add_modifier(Modifier::BOLD),
+            response_code_style(&resp.code),
         );
         let desc_span = if let Some(ref d) = resp.description {
-            Span::styled(format!("  {}", d), Style::default().fg(Color::Gray))
+            Span::styled(format!("  {}", d), secondary_text_style())
         } else {
             Span::raw("")
         };
@@ -1324,14 +1197,8 @@ fn responses_lines(
 
         if let Some(&hk) = hotkey_for_resp.get(&resp_idx) {
             row.push(Span::raw("  "));
-            row.push(Span::styled(
-                format!("[{}]", hk),
-                Style::default().fg(Color::Yellow),
-            ));
-            row.push(Span::styled(
-                " schema",
-                Style::default().fg(Color::DarkGray),
-            ));
+            row.push(Span::styled(format!("[{}]", hk), hint_key_style()));
+            row.push(Span::styled(" schema", muted_text_style()));
         }
         out.push(Line::from(row));
     }

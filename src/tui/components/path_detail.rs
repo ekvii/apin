@@ -1,25 +1,26 @@
 use ratatui::{
-    Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, ListState, Paragraph, Wrap},
+    Frame,
 };
 
 use crate::spec::{Operation, Param, PathKind, RequestBody, Response, Spec};
 
 use super::super::app::{Focus, OpsState, TreeCursor};
-use super::styles::{border_style, method_color, response_code_style, truncate};
+use super::styles::{
+    body_badge_style, border_style, deprecated_label_style, deprecated_name_style, method_color,
+    muted_text_style, primary_text_style, required_label_style, response_code_style,
+    secondary_text_style, truncate, webhook_badge_style,
+};
 
 // ── Key column ────────────────────────────────────────────────────────────────
 
 const KEY_W: usize = 8;
 
 fn key(label: &str) -> Span<'static> {
-    Span::styled(
-        format!("  {:<KEY_W$}", label),
-        Style::default().fg(Color::DarkGray),
-    )
+    Span::styled(format!("  {:<KEY_W$}", label), muted_text_style())
 }
 
 // ── Per-block line builders ───────────────────────────────────────────────────
@@ -34,25 +35,13 @@ fn header_line(op: &Operation) -> Line<'static> {
     if op.deprecated {
         spans.push(Span::styled(
             "[deprecated] ",
-            Style::default()
-                .fg(Color::LightRed)
-                .add_modifier(Modifier::BOLD),
+            deprecated_label_style().add_modifier(Modifier::BOLD),
         ));
     }
     if let Some(ref sum) = op.summary {
-        spans.push(Span::styled(
-            sum.clone(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(sum.clone(), primary_text_style()));
     } else if let Some(ref oid) = op.operation_id {
-        spans.push(Span::styled(
-            oid.clone(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(oid.clone(), primary_text_style()));
     }
     Line::from(spans)
 }
@@ -72,7 +61,7 @@ fn desc_line(op: &Operation, area_width: u16) -> Option<Line<'static>> {
     let max_w = (area_width as usize).saturating_sub(2 + KEY_W + 4);
     Some(Line::from(vec![
         key("desc"),
-        Span::styled(truncate(first, max_w), Style::default().fg(Color::Gray)),
+        Span::styled(truncate(first, max_w), secondary_text_style()),
     ]))
 }
 
@@ -94,19 +83,15 @@ fn param_lines(params: &[Param]) -> Vec<Line<'static>> {
                     spans.push(Span::raw("  "));
                 }
                 let name_style = if p.deprecated {
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::CROSSED_OUT)
+                    deprecated_name_style()
                 } else if p.required {
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    primary_text_style()
                 } else {
-                    Style::default().fg(Color::Gray)
+                    secondary_text_style()
                 };
                 spans.push(Span::styled(p.name.clone(), name_style));
                 if p.required && !p.deprecated {
-                    spans.push(Span::styled("*", Style::default().fg(Color::Red)));
+                    spans.push(Span::styled("*", required_label_style()));
                 }
             }
             Some(Line::from(spans))
@@ -122,13 +107,7 @@ fn body_line(rb: &RequestBody) -> Option<Line<'static>> {
     if let Some(ref tree) = rb.schema_tree {
         let req_label = if rb.required { "required" } else { "optional" };
         let badge = format!(" {} {} ", req_label, tree.kind.label());
-        spans.push(Span::styled(
-            badge,
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(badge, body_badge_style()));
         spans.push(Span::raw("  "));
     }
 
@@ -138,15 +117,12 @@ fn body_line(rb: &RequestBody) -> Option<Line<'static>> {
             if i > 0 {
                 spans.push(Span::raw("  "));
             }
-            spans.push(Span::styled(
-                f.name.clone(),
-                Style::default().fg(Color::Gray),
-            ));
+            spans.push(Span::styled(f.name.clone(), secondary_text_style()));
         }
         if rb.fields.len() > take {
             spans.push(Span::styled(
                 format!("  +{}", rb.fields.len() - take),
-                Style::default().fg(Color::DarkGray),
+                muted_text_style(),
             ));
         }
     }
@@ -172,11 +148,11 @@ fn resp_line(responses: &[Response]) -> Option<Line<'static>> {
         if let Some(ref d) = resp.description {
             spans.push(Span::styled(
                 format!(" {}", truncate(d, 20)),
-                Style::default().fg(Color::Gray),
+                secondary_text_style(),
             ));
         }
         if responses.len() > 1 && i < responses.len() - 1 {
-            spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("  ", muted_text_style()));
         }
     }
     Some(Line::from(spans))
@@ -200,16 +176,8 @@ fn hint_line(op: &Operation) -> Option<Line<'static>> {
         return None;
     }
     Some(Line::from(vec![
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " for full detail & schemas",
-            Style::default().fg(Color::Gray),
-        ),
+        Span::styled("Enter", primary_text_style()),
+        Span::styled(" for full detail & schemas", secondary_text_style()),
     ]))
 }
 
@@ -246,11 +214,7 @@ pub(in crate::tui) fn draw(
                 .title(" Detail ")
                 .border_style(border_style(false));
             frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "select a path",
-                    Style::default().fg(Color::DarkGray),
-                ))
-                .block(block),
+                Paragraph::new(Span::styled("select a path", muted_text_style())).block(block),
                 area,
             );
             return;
@@ -260,13 +224,7 @@ pub(in crate::tui) fn draw(
     // Title: path string + optional [WH] webhook badge.
     let mut title_spans: Vec<Span> = vec![Span::raw(format!(" {} ", path_str))];
     if path_kind == PathKind::Webhook {
-        title_spans.push(Span::styled(
-            "[WH] ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ));
+        title_spans.push(Span::styled("[WH] ", webhook_badge_style()));
     }
 
     if op_count == 0 {
@@ -275,11 +233,7 @@ pub(in crate::tui) fn draw(
             .title(Line::from(title_spans))
             .border_style(border_style(is_detail_focused));
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no operations",
-                Style::default().fg(Color::DarkGray),
-            ))
-            .block(block),
+            Paragraph::new(Span::styled("no operations", muted_text_style())).block(block),
             area,
         );
         return;

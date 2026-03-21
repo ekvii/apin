@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
@@ -10,7 +10,11 @@ use crate::spec::Spec;
 
 use super::super::app::{Focus, OpsState, TreeCursor};
 use super::path_tree::PathNode;
-use super::styles::{border_style, highlight_style, method_color};
+use super::styles::{
+    border_style, deprecated_name_style, highlight_style, list_item_style, method_color,
+    muted_text_style, nav_arrow_style, paths_group_style, search_border_style,
+    webhooks_group_style,
+};
 
 /// Per-column data collected before rendering a tree column widget.
 struct ColData {
@@ -69,11 +73,7 @@ pub(in crate::tui) fn draw(
             .title(spec_title.unwrap_or_else(|| " Paths ".into()))
             .border_style(border_style(false));
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "(no paths)",
-                Style::default().fg(Color::DarkGray),
-            ))
-            .block(block),
+            Paragraph::new(Span::styled("(no paths)", muted_text_style())).block(block),
             area,
         );
         return;
@@ -196,33 +196,23 @@ pub(in crate::tui) fn draw(
                 // "__paths__" is a synthetic group node — render as "[PATHS]"
                 if label == "__paths__" {
                     return ListItem::new(Line::from(vec![
-                        Span::styled(
-                            "[PATHS]",
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(" ›", Style::default().fg(Color::DarkGray)),
+                        Span::styled("[PATHS]", paths_group_style()),
+                        Span::styled(" ›", nav_arrow_style()),
                     ]));
                 }
                 // "__webhooks__" is a synthetic group node — render as "[WEBHOOKS]"
                 if label == "__webhooks__" {
                     return ListItem::new(Line::from(vec![
-                        Span::styled(
-                            "[WEBHOOKS]",
-                            Style::default()
-                                .fg(Color::Magenta)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(" ›", Style::default().fg(Color::DarkGray)),
+                        Span::styled("[WEBHOOKS]", webhooks_group_style()),
+                        Span::styled(" ›", nav_arrow_style()),
                     ]));
                 }
                 if *is_leaf {
-                    ListItem::new(Span::styled(display, Style::default().fg(Color::White)))
+                    ListItem::new(Span::styled(display, list_item_style()))
                 } else {
                     ListItem::new(Line::from(vec![
                         Span::raw(display),
-                        Span::styled(" ›", Style::default().fg(Color::DarkGray)),
+                        Span::styled(" ›", nav_arrow_style()),
                     ]))
                 }
             })
@@ -234,7 +224,7 @@ pub(in crate::tui) fn draw(
                     .borders(Borders::ALL)
                     .title(col_title)
                     .border_style(if is_active && data.search_active {
-                        Style::default().fg(Color::Yellow)
+                        search_border_style()
                     } else {
                         border_style(is_active)
                     }),
@@ -310,10 +300,7 @@ fn draw_ops_column(
             };
             let mut spans = vec![Span::styled(format!(" {} ", method), style)];
             if *deprecated {
-                spans.push(Span::styled(
-                    " [deprecated]",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(" [deprecated]", deprecated_name_style()));
             }
             ListItem::new(Line::from(spans))
         })
@@ -325,7 +312,7 @@ fn draw_ops_column(
                 .borders(Borders::ALL)
                 .title(title)
                 .border_style(if ops.search.active {
-                    Style::default().fg(Color::Yellow)
+                    search_border_style()
                 } else {
                     border_style(is_ops_focused)
                 }),

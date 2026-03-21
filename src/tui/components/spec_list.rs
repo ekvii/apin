@@ -11,7 +11,7 @@ use crate::spec::Spec;
 use super::super::app::Focus;
 use super::styles::{border_style, highlight_style};
 
-pub(crate) fn draw(
+pub(in crate::tui) fn draw(
     frame: &mut Frame,
     specs: &[Spec],
     focus: &Focus,

@@ -14,7 +14,7 @@ use super::styles::{border_style, highlight_style, method_color};
 
 const MIN_COL_WIDTH: u16 = 14;
 
-pub(crate) fn draw(
+pub(in crate::tui) fn draw(
     frame: &mut Frame,
     specs: &[Spec],
     focus: &Focus,

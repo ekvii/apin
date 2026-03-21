@@ -11,7 +11,7 @@ use crate::spec::Spec;
 use super::super::app::{Focus, OpsState, TreeCursor};
 use super::styles::{border_style, method_color, response_code_style, truncate};
 
-pub(crate) fn draw(
+pub(in crate::tui) fn draw(
     frame: &mut Frame,
     specs: &[Spec],
     focus: &Focus,

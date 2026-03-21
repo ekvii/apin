@@ -3,7 +3,7 @@ use ratatui::{layout::Rect, style::Style, widgets::Paragraph, Frame};
 use super::super::app::{Focus, OpsState};
 use super::detail::Search;
 
-pub(crate) fn draw(
+pub(in crate::tui) fn draw(
     frame: &mut Frame,
     focus: &Focus,
     _ops: &OpsState,

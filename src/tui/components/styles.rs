@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 
-pub(crate) fn border_style(active: bool) -> Style {
+pub(in crate::tui) fn border_style(active: bool) -> Style {
     if active {
         Style::default().fg(Color::Cyan)
     } else {
@@ -8,7 +8,7 @@ pub(crate) fn border_style(active: bool) -> Style {
     }
 }
 
-pub(crate) fn highlight_style(active: bool) -> Style {
+pub(in crate::tui) fn highlight_style(active: bool) -> Style {
     if active {
         Style::default()
             .bg(Color::Cyan)
@@ -19,7 +19,7 @@ pub(crate) fn highlight_style(active: bool) -> Style {
     }
 }
 
-pub(crate) fn method_color(method: &str) -> Style {
+pub(in crate::tui) fn method_color(method: &str) -> Style {
     match method {
         "GET" => Style::default().fg(Color::Black).bg(Color::Green),
         "POST" => Style::default().fg(Color::Black).bg(Color::Blue),
@@ -30,7 +30,7 @@ pub(crate) fn method_color(method: &str) -> Style {
     }
 }
 
-pub(crate) fn response_code_style(code: &str) -> Style {
+pub(in crate::tui) fn response_code_style(code: &str) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match code.chars().next() {
         Some('2') => base.fg(Color::Black).bg(Color::Green),
@@ -41,7 +41,7 @@ pub(crate) fn response_code_style(code: &str) -> Style {
     }
 }
 
-pub(crate) fn truncate(s: &str, max: usize) -> String {
+pub(in crate::tui) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {

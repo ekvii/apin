@@ -15,18 +15,18 @@ use super::super::app::{OpsState, TreeCursor};
 
 /// Incremental search state for the detail view.
 #[derive(Clone, Default)]
-pub(crate) struct Search {
-    pub(crate) query: String,
-    pub(crate) active: bool,
+pub(in crate::tui) struct Search {
+    pub(in crate::tui) query: String,
+    pub(in crate::tui) active: bool,
 }
 
 impl Search {
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(in crate::tui) fn is_empty(&self) -> bool {
         self.query.is_empty()
     }
 
     /// Case-insensitive substring match.
-    pub(crate) fn matches(&self, label: &str) -> bool {
+    pub(in crate::tui) fn matches(&self, label: &str) -> bool {
         if self.query.is_empty() {
             return true;
         }
@@ -40,11 +40,11 @@ impl Search {
 
 /// All state and rendering logic for the full-screen operation detail panel.
 #[derive(Default)]
-pub(crate) struct DetailView {
+pub(in crate::tui) struct DetailView {
     /// Scroll offset (in virtual lines).
-    pub(crate) scroll: usize,
+    pub(in crate::tui) scroll: usize,
     /// Whether the cursor is currently inside the request-body schema tree widget.
-    pub(crate) in_tree: bool,
+    pub(in crate::tui) in_tree: bool,
     /// Virtual line index where the request-body schema tree starts (cached from last draw).
     tree_start: usize,
     /// Number of currently visible rows in the request-body schema tree (cached from last draw).
@@ -57,9 +57,9 @@ pub(crate) struct DetailView {
     /// Visible height of the detail view (rows), cached for half-page scroll.
     view_height: usize,
     /// Incremental search state.
-    pub(crate) search: Search,
+    pub(in crate::tui) search: Search,
     /// Virtual line indices of lines that match the current search query.
-    pub(crate) search_matches: Vec<usize>,
+    pub(in crate::tui) search_matches: Vec<usize>,
     /// Which match the cursor is currently on (index into `search_matches`).
     search_cursor: usize,
 
@@ -72,14 +72,14 @@ pub(crate) struct DetailView {
     /// Visible row-count of each response tree slot (cached from last draw).
     resp_tree_lens: Vec<usize>,
     /// Index into `resp_tree_states` that currently has keyboard focus, or `None`.
-    pub(crate) focused_resp_tree: Option<usize>,
+    pub(in crate::tui) focused_resp_tree: Option<usize>,
 }
 
 impl DetailView {
     // ── State sync ────────────────────────────────────────────────────────────
 
     /// Reset the schema tree state when the selected operation changes.
-    pub(crate) fn sync_schema_tree(&mut self, op_key: Option<(usize, usize, usize)>) {
+    pub(in crate::tui) fn sync_schema_tree(&mut self, op_key: Option<(usize, usize, usize)>) {
         if self.schema_tree_op_key != op_key {
             self.schema_tree_op_key = op_key;
             self.schema_tree_state = TreeState::default();
@@ -95,63 +95,63 @@ impl DetailView {
 
     // ── Action methods (called from events.rs) ────────────────────────────────
 
-    pub(crate) fn in_tree(&self) -> bool {
+    pub(in crate::tui) fn in_tree(&self) -> bool {
         self.in_tree
     }
 
-    pub(crate) fn back(&mut self) {
+    pub(in crate::tui) fn back(&mut self) {
         self.scroll = 0;
         self.in_tree = false;
         self.focused_resp_tree = None;
     }
 
-    pub(crate) fn scroll_down(&mut self, n: usize) {
+    pub(in crate::tui) fn scroll_down(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_add(n);
     }
 
-    pub(crate) fn scroll_up(&mut self, n: usize) {
+    pub(in crate::tui) fn scroll_up(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_sub(n);
     }
 
-    pub(crate) fn scroll_half_down(&mut self) {
+    pub(in crate::tui) fn scroll_half_down(&mut self) {
         let half = (self.view_height / 2).max(1);
         self.scroll += half;
     }
 
-    pub(crate) fn scroll_half_up(&mut self) {
+    pub(in crate::tui) fn scroll_half_up(&mut self) {
         let half = (self.view_height / 2).max(1);
         self.scroll = self.scroll.saturating_sub(half);
     }
 
-    pub(crate) fn scroll_top(&mut self) {
+    pub(in crate::tui) fn scroll_top(&mut self) {
         self.scroll = 0;
     }
 
-    pub(crate) fn scroll_bottom(&mut self) {
+    pub(in crate::tui) fn scroll_bottom(&mut self) {
         self.scroll = usize::MAX / 2;
     }
 
-    pub(crate) fn focus_tree(&mut self) {
+    pub(in crate::tui) fn focus_tree(&mut self) {
         if self.tree_len > 0 {
             self.in_tree = true;
             self.schema_tree_state.select_first();
         }
     }
 
-    pub(crate) fn unfocus_tree(&mut self) {
+    pub(in crate::tui) fn unfocus_tree(&mut self) {
         self.in_tree = false;
     }
 
     // ── Response tree focus / navigation ─────────────────────────────────────
 
     /// Returns `true` if any response tree currently has keyboard focus.
-    pub(crate) fn in_resp_tree(&self) -> bool {
+    pub(in crate::tui) fn in_resp_tree(&self) -> bool {
         self.focused_resp_tree.is_some()
     }
 
     /// Focus response tree `idx` (0-based, matching the 1-based hotkey digit).
     /// Ignored if `idx` is out of range.
-    pub(crate) fn focus_resp_tree(&mut self, idx: usize) {
+    pub(in crate::tui) fn focus_resp_tree(&mut self, idx: usize) {
         if idx < self.resp_tree_states.len() {
             self.focused_resp_tree = Some(idx);
             self.in_tree = false;
@@ -164,11 +164,11 @@ impl DetailView {
     }
 
     /// Remove focus from whatever response tree is currently focused.
-    pub(crate) fn unfocus_resp_tree(&mut self) {
+    pub(in crate::tui) fn unfocus_resp_tree(&mut self) {
         self.focused_resp_tree = None;
     }
 
-    pub(crate) fn resp_tree_key_down(&mut self) {
+    pub(in crate::tui) fn resp_tree_key_down(&mut self) {
         if let Some(i) = self.focused_resp_tree
             && let Some(s) = self.resp_tree_states.get_mut(i)
         {
@@ -176,7 +176,7 @@ impl DetailView {
         }
     }
 
-    pub(crate) fn resp_tree_key_up(&mut self) {
+    pub(in crate::tui) fn resp_tree_key_up(&mut self) {
         if let Some(i) = self.focused_resp_tree
             && let Some(s) = self.resp_tree_states.get_mut(i)
         {
@@ -184,7 +184,7 @@ impl DetailView {
         }
     }
 
-    pub(crate) fn resp_tree_key_left(&mut self) {
+    pub(in crate::tui) fn resp_tree_key_left(&mut self) {
         if let Some(i) = self.focused_resp_tree
             && let Some(s) = self.resp_tree_states.get_mut(i)
         {
@@ -192,7 +192,7 @@ impl DetailView {
         }
     }
 
-    pub(crate) fn resp_tree_key_right(&mut self) {
+    pub(in crate::tui) fn resp_tree_key_right(&mut self) {
         if let Some(i) = self.focused_resp_tree
             && let Some(s) = self.resp_tree_states.get_mut(i)
         {
@@ -202,32 +202,32 @@ impl DetailView {
 
     // ── Schema tree navigation ────────────────────────────────────────────────
 
-    pub(crate) fn schema_tree_key_down(&mut self) {
+    pub(in crate::tui) fn schema_tree_key_down(&mut self) {
         self.schema_tree_state.key_down();
     }
 
-    pub(crate) fn schema_tree_key_up(&mut self) {
+    pub(in crate::tui) fn schema_tree_key_up(&mut self) {
         self.schema_tree_state.key_up();
     }
 
-    pub(crate) fn schema_tree_key_left(&mut self) {
+    pub(in crate::tui) fn schema_tree_key_left(&mut self) {
         self.schema_tree_state.key_left();
     }
 
-    pub(crate) fn schema_tree_key_right(&mut self) {
+    pub(in crate::tui) fn schema_tree_key_right(&mut self) {
         self.schema_tree_state.key_right();
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
 
-    pub(crate) fn search_open(&mut self) {
+    pub(in crate::tui) fn search_open(&mut self) {
         self.search.active = true;
         self.search.query.clear();
         self.search_matches.clear();
         self.search_cursor = 0;
     }
 
-    pub(crate) fn search_push(&mut self, ch: char) {
+    pub(in crate::tui) fn search_push(&mut self, ch: char) {
         self.search.query.push(ch);
         if let Some(&line) = self.search_matches.first() {
             self.scroll = line;
@@ -235,7 +235,7 @@ impl DetailView {
         }
     }
 
-    pub(crate) fn search_pop(&mut self) {
+    pub(in crate::tui) fn search_pop(&mut self) {
         self.search.query.pop();
         if let Some(&line) = self.search_matches.first() {
             self.scroll = line;
@@ -243,34 +243,34 @@ impl DetailView {
         }
     }
 
-    pub(crate) fn search_clear(&mut self) {
+    pub(in crate::tui) fn search_clear(&mut self) {
         self.search.query.clear();
         self.search_matches.clear();
         self.search_cursor = 0;
     }
 
-    pub(crate) fn search_cancel(&mut self) {
+    pub(in crate::tui) fn search_cancel(&mut self) {
         self.search.active = false;
         self.search.query.clear();
         self.search_matches.clear();
         self.search_cursor = 0;
     }
 
-    pub(crate) fn search_enter(&mut self) {
+    pub(in crate::tui) fn search_enter(&mut self) {
         self.search.active = false;
         if let Some(&line) = self.search_matches.first() {
             self.scroll = line;
         }
     }
 
-    pub(crate) fn search_next(&mut self) {
+    pub(in crate::tui) fn search_next(&mut self) {
         if !self.search_matches.is_empty() {
             self.search_cursor = (self.search_cursor + 1) % self.search_matches.len();
             self.scroll = self.search_matches[self.search_cursor];
         }
     }
 
-    pub(crate) fn search_prev(&mut self) {
+    pub(in crate::tui) fn search_prev(&mut self) {
         if !self.search_matches.is_empty() {
             let len = self.search_matches.len();
             self.search_cursor = self.search_cursor.checked_sub(1).unwrap_or(len - 1);
@@ -281,7 +281,7 @@ impl DetailView {
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     /// Render the full-screen detail panel into `area`.
-    pub(crate) fn draw(
+    pub(in crate::tui) fn draw(
         &mut self,
         frame: &mut Frame,
         specs: &[Spec],
